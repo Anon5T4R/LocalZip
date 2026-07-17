@@ -235,7 +235,8 @@ pub struct OpDone {
 }
 
 struct Reporter<'a> {
-    app: &'a AppHandle,
+    /// `None` nos testes (sem runtime Tauri) — aí nada é emitido.
+    app: Option<&'a AppHandle>,
     op_id: u64,
     done_files: u64,
     total_files: u64,
@@ -245,7 +246,7 @@ struct Reporter<'a> {
 }
 
 impl<'a> Reporter<'a> {
-    fn new(app: &'a AppHandle, op_id: u64, total_files: u64, total_bytes: u64) -> Self {
+    fn new(app: Option<&'a AppHandle>, op_id: u64, total_files: u64, total_bytes: u64) -> Self {
         Self { app, op_id, done_files: 0, total_files, done_bytes: 0, total_bytes, last: Instant::now() }
     }
     fn bytes(&mut self, n: u64, current: &str) {
@@ -260,7 +261,8 @@ impl<'a> Reporter<'a> {
     }
     fn emit(&mut self, current: &str) {
         self.last = Instant::now();
-        let _ = self.app.emit(
+        let Some(app) = self.app else { return };
+        let _ = app.emit(
             "zipop-progress",
             OpProgress {
                 op_id: self.op_id,
@@ -318,12 +320,13 @@ pub fn extract(
     filter: Option<Vec<String>>,
     password: Option<String>,
 ) {
-    let result = extract_inner(app, op_id, &cancel, &archive, &dest, &filter, password.as_deref());
+    let result =
+        extract_inner(Some(app), op_id, &cancel, &archive, &dest, &filter, password.as_deref());
     emit_done(app, op_id, result, cancel.load(Ordering::Relaxed));
 }
 
 fn extract_inner(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     op_id: u64,
     cancel: &AtomicBool,
     archive: &str,
@@ -357,29 +360,35 @@ fn extract_inner(
                 if cancel.load(Ordering::Relaxed) {
                     return Err("canceled".into());
                 }
-                let mut f = match password {
-                    Some(pw) => za
-                        .by_index_decrypt(i, pw.as_bytes())
-                        .map_err(|_| "senha incorreta ou arquivo corrompido".to_string())?,
-                    None => match za.by_index(i) {
-                        Ok(f) => f,
-                        Err(zip::result::ZipError::UnsupportedArchive(msg))
-                            if msg.contains("Password") =>
-                        {
-                            return Err("NEED_PASSWORD".into())
-                        }
-                        Err(e) => return Err(e.to_string()),
-                    },
+                // Decide pelo cabeçalho CRU, sem abrir o conteúdo: chamar
+                // `by_index_decrypt` em pastas/entradas não-cifradas estourava
+                // "senha incorreta" mesmo com a senha certa (bug do teste
+                // real — zips de outras ferramentas marcam a flag de cifra na
+                // entrada de pasta, que tem 0 bytes e nem header de cifra tem).
+                let (inner, is_dir, encrypted) = {
+                    let f = za.by_index_raw(i).map_err(|e| e.to_string())?;
+                    (norm_inner(f.name()), f.is_dir(), f.encrypted())
                 };
-                let inner = norm_inner(f.name());
                 if inner.is_empty() || !selected(&inner, filter) {
                     continue;
                 }
                 let target = safe_join(&dest_dir, &inner)?;
-                if f.is_dir() {
+                if is_dir {
                     fs::create_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
                     continue;
                 }
+                // Só entradas CIFRADAS passam pelo decrypt; o resto abre normal.
+                let mut f = match (encrypted, password) {
+                    (false, _) => za.by_index(i).map_err(|e| e.to_string())?,
+                    (true, None) => return Err("NEED_PASSWORD".into()),
+                    (true, Some(pw)) => match za.by_index_decrypt(i, pw.as_bytes()) {
+                        Ok(f) => f,
+                        Err(zip::result::ZipError::InvalidPassword) => {
+                            return Err("WRONG_PASSWORD".into())
+                        }
+                        Err(e) => return Err(e.to_string()),
+                    },
+                };
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
                 }
@@ -391,7 +400,11 @@ fn extract_inner(
                         let _ = fs::remove_file(&target);
                         return Err("canceled".into());
                     }
-                    let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+                    // Erro de leitura/CRC em entrada cifrada ≈ senha errada que
+                    // passou no check fraco do ZipCrypto (1 byte, 1/256).
+                    let n = f.read(&mut buf).map_err(|e| {
+                        if encrypted { "WRONG_PASSWORD".to_string() } else { e.to_string() }
+                    })?;
                     if n == 0 {
                         break;
                     }
@@ -454,8 +467,13 @@ fn extract_inner(
             }
             match r {
                 Ok(_) => {}
-                Err(sevenz_rust2::Error::PasswordRequired)
-                | Err(sevenz_rust2::Error::MaybeBadPassword(_)) => return Err("NEED_PASSWORD".into()),
+                Err(sevenz_rust2::Error::PasswordRequired) => return Err("NEED_PASSWORD".into()),
+                Err(sevenz_rust2::Error::MaybeBadPassword(_)) => {
+                    // Com senha fornecida, "talvez senha ruim" = senha errada.
+                    return Err(
+                        if password.is_some() { "WRONG_PASSWORD" } else { "NEED_PASSWORD" }.into()
+                    );
+                }
                 Err(e) => return Err(e.to_string()),
             }
         }
@@ -581,7 +599,7 @@ fn create_inner(
         return Err("nada pra compactar".into());
     }
     let (files, total_bytes) = walk_sources(sources)?;
-    let mut rep = Reporter::new(app, op_id, files.len() as u64, total_bytes);
+    let mut rep = Reporter::new(Some(app), op_id, files.len() as u64, total_bytes);
     let out = fs::File::create(dest).map_err(|e| format!("{dest}: {e}"))?;
 
     match format {
@@ -671,20 +689,35 @@ fn test_inner(archive: &str, password: Option<&str>) -> Result<u64, (String, Str
             let file = fs::File::open(archive).map_err(|e| (String::new(), e.to_string()))?;
             let mut za = zip::ZipArchive::new(file).map_err(|e| (String::new(), e.to_string()))?;
             for i in 0..za.len() {
-                let mut f = match password {
-                    Some(pw) => za.by_index_decrypt(i, pw.as_bytes()),
-                    None => za.by_index(i),
-                }
-                .map_err(|e| (String::new(), e.to_string()))?;
-                let name = norm_inner(f.name());
-                if f.is_dir() {
+                // Mesmo cuidado da extração: pastas nunca abrem conteúdo e só
+                // entradas cifradas passam pelo decrypt.
+                let (name, is_dir, encrypted) = {
+                    let f = za.by_index_raw(i).map_err(|e| (String::new(), e.to_string()))?;
+                    (norm_inner(f.name()), f.is_dir(), f.encrypted())
+                };
+                if is_dir {
                     continue;
                 }
+                let mut f = match (encrypted, password) {
+                    (false, _) => za.by_index(i).map_err(|e| (name.clone(), e.to_string()))?,
+                    (true, None) => return Err((name, "NEED_PASSWORD".into())),
+                    (true, Some(pw)) => match za.by_index_decrypt(i, pw.as_bytes()) {
+                        Ok(f) => f,
+                        Err(zip::result::ZipError::InvalidPassword) => {
+                            return Err((name, "WRONG_PASSWORD".into()))
+                        }
+                        Err(e) => return Err((name, e.to_string())),
+                    },
+                };
                 loop {
                     match f.read(&mut sink) {
                         Ok(0) => break,
                         Ok(_) => {}
-                        Err(e) => return Err((name, e.to_string())),
+                        Err(e) => {
+                            let msg =
+                                if encrypted { "WRONG_PASSWORD".to_string() } else { e.to_string() };
+                            return Err((name, msg));
+                        }
                     }
                 }
                 tested += 1;
@@ -823,6 +856,235 @@ mod tests {
         assert_eq!(info.total_size, 14);
         assert!(!info.bomb_suspect);
         assert!(info.entries.iter().any(|e| e.path == "src/sub/b.txt"));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn zip_aes_com_pastas_extrai_com_senha() {
+        // Reproduz o cenário do bug reportado: zip AES-256 COM PASTAS
+        // (entrada de diretório não-cifrada + arquivos cifrados). Senha certa
+        // TEM que extrair; errada/faltando viram códigos claros.
+        let base = std::env::temp_dir().join("localzip-test-aes-pastas");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let zip_path = base.join("p.zip");
+        {
+            let out = fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(out);
+            // Mesmas opções do create_inner (Deflated + large_file + AES-256).
+            let opt = zip::write::FileOptions::<()>::default()
+                .compression_method(zip::CompressionMethod::Deflated)
+                .large_file(true)
+                .with_aes_encryption(zip::AesMode::Aes256, "abc123");
+            zw.add_directory("pasta/sub", zip::write::SimpleFileOptions::default()).unwrap();
+            zw.start_file("pasta/sub/arquivo.txt", opt).unwrap();
+            zw.write_all(b"aes com pastas").unwrap();
+            zw.start_file("raiz.txt", opt).unwrap();
+            zw.write_all(b"raiz").unwrap();
+            zw.finish().unwrap();
+        }
+        let zip_s = zip_path.to_str().unwrap();
+        let cancel = AtomicBool::new(false);
+
+        // Senha certa: extrai tudo, com a estrutura de pastas.
+        let dest = base.join("ok");
+        extract_inner(None, 1, &cancel, zip_s, dest.to_str().unwrap(), &None, Some("abc123"))
+            .expect("senha certa deveria extrair");
+        assert_eq!(fs::read(dest.join("pasta/sub/arquivo.txt")).unwrap(), b"aes com pastas");
+        assert_eq!(fs::read(dest.join("raiz.txt")).unwrap(), b"raiz");
+
+        // Senha errada e sem senha: códigos claros pro front.
+        let dest2 = base.join("err");
+        let err = extract_inner(None, 2, &cancel, zip_s, dest2.to_str().unwrap(), &None, Some("errada"))
+            .unwrap_err();
+        assert_eq!(err, "WRONG_PASSWORD");
+        let err = extract_inner(None, 3, &cancel, zip_s, dest2.to_str().unwrap(), &None, None)
+            .unwrap_err();
+        assert_eq!(err, "NEED_PASSWORD");
+
+        // Testar integridade segue os mesmos caminhos.
+        assert!(test_integrity(zip_s, Some("abc123")).ok);
+        assert!(!test_integrity(zip_s, Some("errada")).ok);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    // ---- ZipCrypto de verdade, gerado à mão (a escrita ZipCrypto é
+    // `pub(crate)` no crate zip, então o teste monta os bytes do arquivo) ----
+
+    fn crc32_byte(crc: u32, b: u8) -> u32 {
+        let mut c = (crc ^ b as u32) & 0xff;
+        for _ in 0..8 {
+            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+        }
+        (crc >> 8) ^ c
+    }
+
+    fn crc32(data: &[u8]) -> u32 {
+        let mut c = 0xffff_ffff_u32;
+        for &b in data {
+            c = crc32_byte(c, b);
+        }
+        c ^ 0xffff_ffff
+    }
+
+    /// Estado de chaves do ZipCrypto (PKZIP legado).
+    struct ZcKeys(u32, u32, u32);
+    impl ZcKeys {
+        fn derive(password: &[u8]) -> Self {
+            let mut k = ZcKeys(0x12345678, 0x23456789, 0x34567890);
+            for &b in password {
+                k.update(b);
+            }
+            k
+        }
+        fn update(&mut self, b: u8) {
+            self.0 = crc32_byte(self.0, b);
+            self.1 = self.1.wrapping_add(self.0 & 0xff).wrapping_mul(0x0808_8405).wrapping_add(1);
+            self.2 = crc32_byte(self.2, (self.1 >> 24) as u8);
+        }
+        fn encrypt(&mut self, p: u8) -> u8 {
+            let t = (self.2 as u16) | 3;
+            let ks = (t.wrapping_mul(t ^ 1) >> 8) as u8;
+            self.update(p);
+            p ^ ks
+        }
+    }
+
+    /// Cifra `plain` no formato ZipCrypto: 12 bytes de header (o último é o
+    /// byte alto do CRC — validador PkzipCrc32) + dados, tudo cifrado.
+    fn zipcrypto_encrypt(password: &[u8], crc: u32, plain: &[u8]) -> Vec<u8> {
+        let mut k = ZcKeys::derive(password);
+        let mut header = [0u8; 12];
+        header[11] = (crc >> 24) as u8;
+        header.iter().chain(plain.iter()).map(|&p| k.encrypt(p)).collect()
+    }
+
+    struct RawEntry<'a> {
+        name: &'a str,
+        /// bit 0 = cifrado (ZipCrypto).
+        flags: u16,
+        crc: u32,
+        /// Bytes já no formato final (cifrados se for o caso); método STORED.
+        data: Vec<u8>,
+        uncomp: u32,
+    }
+
+    /// Monta um zip mínimo (STORED) byte a byte: local headers + central dir + EOCD.
+    fn build_raw_zip(entries: &[RawEntry]) -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        let mut offsets = Vec::new();
+        for e in entries {
+            offsets.push(out.len() as u32);
+            out.extend_from_slice(&0x04034b50u32.to_le_bytes());
+            out.extend_from_slice(&20u16.to_le_bytes()); // versão mínima
+            out.extend_from_slice(&e.flags.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // método STORED
+            out.extend_from_slice(&0u16.to_le_bytes()); // hora DOS
+            out.extend_from_slice(&0x21u16.to_le_bytes()); // data DOS (1980-01-01)
+            out.extend_from_slice(&e.crc.to_le_bytes());
+            out.extend_from_slice(&(e.data.len() as u32).to_le_bytes());
+            out.extend_from_slice(&e.uncomp.to_le_bytes());
+            out.extend_from_slice(&(e.name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // extra
+            out.extend_from_slice(e.name.as_bytes());
+            out.extend_from_slice(&e.data);
+        }
+        let cd_start = out.len() as u32;
+        for (e, off) in entries.iter().zip(&offsets) {
+            out.extend_from_slice(&0x02014b50u32.to_le_bytes());
+            out.extend_from_slice(&20u16.to_le_bytes()); // made by
+            out.extend_from_slice(&20u16.to_le_bytes()); // needed
+            out.extend_from_slice(&e.flags.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // método
+            out.extend_from_slice(&0u16.to_le_bytes()); // hora
+            out.extend_from_slice(&0x21u16.to_le_bytes()); // data
+            out.extend_from_slice(&e.crc.to_le_bytes());
+            out.extend_from_slice(&(e.data.len() as u32).to_le_bytes());
+            out.extend_from_slice(&e.uncomp.to_le_bytes());
+            out.extend_from_slice(&(e.name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // extra
+            out.extend_from_slice(&0u16.to_le_bytes()); // comentário
+            out.extend_from_slice(&0u16.to_le_bytes()); // disco
+            out.extend_from_slice(&0u16.to_le_bytes()); // attrs internos
+            let ext: u32 = if e.name.ends_with('/') { 0x10 } else { 0 };
+            out.extend_from_slice(&ext.to_le_bytes());
+            out.extend_from_slice(&off.to_le_bytes());
+            out.extend_from_slice(e.name.as_bytes());
+        }
+        let cd_size = out.len() as u32 - cd_start;
+        out.extend_from_slice(&0x06054b50u32.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&cd_size.to_le_bytes());
+        out.extend_from_slice(&cd_start.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn zip_zipcrypto_extrai_e_pasta_com_flag_de_cifra_nao_estoura() {
+        // ZipCrypto (a cifra legada que 7-Zip/WinRAR usam por padrão em "zip
+        // com senha") + o caso patológico do bug: entrada de PASTA com a flag
+        // de cifra ligada e 0 bytes de conteúdo. Antes, o by_index_decrypt
+        // nessa pasta estourava "senha incorreta" mesmo com a senha certa.
+        let pw = b"senha123";
+        let plain: &[u8] = b"conteudo zipcrypto";
+        let crc = crc32(plain);
+        let entries = [
+            RawEntry { name: "pasta/", flags: 1, crc: 0, data: Vec::new(), uncomp: 0 },
+            RawEntry {
+                name: "pasta/segredo.txt",
+                flags: 1,
+                crc,
+                data: zipcrypto_encrypt(pw, crc, plain),
+                uncomp: plain.len() as u32,
+            },
+            RawEntry {
+                name: "aberto.txt",
+                flags: 0,
+                crc: crc32(b"sem senha"),
+                data: b"sem senha".to_vec(),
+                uncomp: 9,
+            },
+        ];
+        let base = std::env::temp_dir().join("localzip-test-zipcrypto");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let zip_path = base.join("zc.zip");
+        fs::write(&zip_path, build_raw_zip(&entries)).unwrap();
+        let zip_s = zip_path.to_str().unwrap();
+        let cancel = AtomicBool::new(false);
+
+        // Listagem marca o que é cifrado.
+        let info = open_archive(zip_s).unwrap();
+        assert!(info.entries.iter().any(|e| e.path == "pasta/segredo.txt" && e.encrypted));
+        assert!(info.entries.iter().any(|e| e.path == "aberto.txt" && !e.encrypted));
+
+        // Senha certa: extrai (ZipCrypto é suportado pelo crate zip 2.4).
+        let dest = base.join("ok");
+        extract_inner(None, 1, &cancel, zip_s, dest.to_str().unwrap(), &None, Some("senha123"))
+            .expect("ZipCrypto com senha certa deveria extrair");
+        assert_eq!(fs::read(dest.join("pasta/segredo.txt")).unwrap(), plain);
+        assert_eq!(fs::read(dest.join("aberto.txt")).unwrap(), b"sem senha");
+
+        // Senha errada e sem senha: códigos claros.
+        let dest2 = base.join("err");
+        let err = extract_inner(None, 2, &cancel, zip_s, dest2.to_str().unwrap(), &None, Some("errada"))
+            .unwrap_err();
+        assert_eq!(err, "WRONG_PASSWORD");
+        let err = extract_inner(None, 3, &cancel, zip_s, dest2.to_str().unwrap(), &None, None)
+            .unwrap_err();
+        assert_eq!(err, "NEED_PASSWORD");
+
+        // Testar integridade: pasta com flag não conta nem estoura.
+        let r = test_integrity(zip_s, Some("senha123"));
+        assert!(r.ok, "{:?}", r.error);
+        assert_eq!(r.tested, 2);
+        assert!(!test_integrity(zip_s, Some("errada")).ok);
 
         let _ = fs::remove_dir_all(&base);
     }

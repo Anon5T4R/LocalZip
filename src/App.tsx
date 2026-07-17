@@ -44,6 +44,8 @@ export default function App() {
       } else if (!e.payload.ok && e.payload.error === "NEED_PASSWORD") {
         // Fallback (o extractTo já pede a senha antes quando detecta cifra).
         ui.pushToast("error", t("password.needed"));
+      } else if (!e.payload.ok && e.payload.error === "WRONG_PASSWORD") {
+        ui.pushToast("error", t("password.wrong"));
       } else if (!e.payload.ok && e.payload.error) {
         ui.pushToast("error", t("toast.opFailed", { error: e.payload.error }));
       } else if (e.payload.ok && e.payload.output) {

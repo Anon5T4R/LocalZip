@@ -55,7 +55,16 @@ export async function testIntegrity() {
   try {
     const r = await backend.testIntegrity(info.path, password);
     if (r.ok) ui.pushToast("ok", t("test.ok", { n: r.tested }));
-    else ui.pushToast("error", t("test.bad", { name: r.bad || "?", error: r.error ?? "" }));
+    else {
+      // Códigos do backend viram mensagem traduzida.
+      const error =
+        r.error === "WRONG_PASSWORD"
+          ? t("password.wrong")
+          : r.error === "NEED_PASSWORD"
+            ? t("password.needed")
+            : (r.error ?? "");
+      ui.pushToast("error", t("test.bad", { name: r.bad || "?", error }));
+    }
   } catch (e) {
     ui.pushToast("error", t("test.bad", { name: "?", error: String(e) }));
   }

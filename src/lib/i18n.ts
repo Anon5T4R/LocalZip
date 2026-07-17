@@ -62,6 +62,7 @@ const pt = {
   "password.title": "Senha do arquivo",
   "password.sub": "Este arquivo está protegido. Digite a senha pra extrair.",
   "password.needed": "Este arquivo pede senha.",
+  "password.wrong": "Senha incorreta — confira e tente de novo.",
 
   // Testar integridade (v0.2)
   "test.running": "Testando integridade…",
@@ -158,6 +159,7 @@ const en: Record<MessageKey, string> = {
   "password.title": "Archive password",
   "password.sub": "This archive is protected. Enter the password to extract.",
   "password.needed": "This archive needs a password.",
+  "password.wrong": "Wrong password — check it and try again.",
 
   "test.running": "Testing integrity…",
   "test.ok": "Intact — {n} items checked",
@@ -245,6 +247,7 @@ const es: Record<MessageKey, string> = {
   "password.title": "Contraseña del archivo",
   "password.sub": "Este archivo está protegido. Escribe la contraseña para extraer.",
   "password.needed": "Este archivo pide contraseña.",
+  "password.wrong": "Contraseña incorrecta: revísala e inténtalo de nuevo.",
 
   "test.running": "Probando integridad…",
   "test.ok": "Íntegro — {n} elementos comprobados",
