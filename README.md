@@ -4,8 +4,17 @@ Compactador de arquivos **100% offline** da suíte Local — o utilitário
 universal de `.zip`/`.tar.gz` que faltava (7-Zip/WinRAR local, sem instalador
 de terceiro).
 
-## Recursos (v0.1)
+## Recursos
 
+**v0.2**
+- **Mais formatos**: além de zip/tar/tar.gz, agora abre e extrai **`tar.xz`,
+  `tar.bz2` e `tar.zst`**
+- **Zip com senha (AES-256)**: extrai zips protegidos (pede a senha) e
+  **cria** zips cifrados
+- **Testar integridade**: lê tudo e valida o CRC de cada item (detecta
+  corrupção/truncamento) — botão "Testar"
+
+**v0.1**
 - **Abrir e navegar** o conteúdo de `zip`, `tar` e `tar.gz/tgz` **sem extrair**
   (lê só o índice; pastas implícitas aparecem certinhas)
 - **Extrair tudo ou só a seleção** pra pasta escolhida, com **progresso e
@@ -18,9 +27,8 @@ de terceiro).
   suspeita) e aviso de itens protegidos por senha
 - Tema claro/escuro/sistema · UI em **PT/EN/ES**
 
-**Roadmap:** v0.2 = 7z, variantes tar (xz/bz2/zst), zip com senha (AES-256),
-testar integridade, adicionar/remover sem re-extrair · v0.3 = extração de RAR,
-volumes divididos, integração com o LocalFiles.
+**Roadmap:** v0.3 = 7z, extração de RAR, volumes divididos, adicionar/remover
+sem re-extrair, integração com o LocalFiles.
 
 ## Stack
 

@@ -1,4 +1,5 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
+import * as backend from "../lib/backend";
 import { t } from "../lib/i18n";
 import { crumbsOf, isSupportedArchive } from "../lib/zpath";
 import { useUi } from "../state/ui";
@@ -8,7 +9,12 @@ import { useZip } from "../state/store";
 export async function pickAndOpen() {
   const picked = await open({
     multiple: false,
-    filters: [{ name: "Arquivos compactados", extensions: ["zip", "tar", "gz", "tgz"] }],
+    filters: [
+      {
+        name: "Arquivos compactados",
+        extensions: ["zip", "tar", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "tbz", "zst", "tzst"],
+      },
+    ],
   });
   if (typeof picked === "string") {
     if (!isSupportedArchive(picked)) {
@@ -20,16 +26,43 @@ export async function pickAndOpen() {
   }
 }
 
-/** Extrai tudo ou a seleção (pergunta a pasta destino). */
+/** Extrai tudo ou a seleção (pergunta a pasta destino; senha se cifrado). */
 export async function extractTo(paths: string[] | null) {
+  const info = useZip.getState().info;
   const dest = await open({ directory: true, title: t("extract.chooseDest") });
-  if (typeof dest === "string") {
-    await useZip.getState().startExtract(dest, paths);
+  if (typeof dest !== "string") return;
+  // Zip cifrado: pede a senha antes (a extração falharia com NEED_PASSWORD).
+  const needsPw = info?.entries.some((e) => e.encrypted) ?? false;
+  if (needsPw) {
+    useUi.getState().setPasswordAsk({ dest, paths });
+    return;
+  }
+  await useZip.getState().startExtract(dest, paths);
+}
+
+/** Testa a integridade do arquivo aberto (lê tudo, valida CRC/stream). */
+export async function testIntegrity() {
+  const info = useZip.getState().info;
+  if (!info) return;
+  const ui = useUi.getState();
+  // Cifrado: pede a senha só pra testar (extração falharia sem ela).
+  let password: string | null = null;
+  if (info.entries.some((e) => e.encrypted)) {
+    password = window.prompt(t("password.title")) || "";
+    if (!password) return;
+  }
+  ui.pushToast("info", t("test.running"));
+  try {
+    const r = await backend.testIntegrity(info.path, password);
+    if (r.ok) ui.pushToast("ok", t("test.ok", { n: r.tested }));
+    else ui.pushToast("error", t("test.bad", { name: r.bad || "?", error: r.error ?? "" }));
+  } catch (e) {
+    ui.pushToast("error", t("test.bad", { name: "?", error: String(e) }));
   }
 }
 
 /** Pergunta o destino do arquivo novo e dispara a compactação. */
-export async function saveAndCreate(format: "zip" | "targz", sources: string[]) {
+export async function saveAndCreate(format: "zip" | "targz", sources: string[], password = "") {
   const first = sources[0]?.split(/[\\/]/).pop() ?? "arquivo";
   const base = sources.length === 1 ? first.replace(/\.[^.]+$/, "") : first;
   const ext = format === "zip" ? "zip" : "tar.gz";
@@ -40,7 +73,7 @@ export async function saveAndCreate(format: "zip" | "targz", sources: string[]) 
   });
   if (typeof dest === "string") {
     useUi.getState().setCreateSources(null);
-    await useZip.getState().startCreate(dest, format, sources);
+    await useZip.getState().startCreate(dest, format, sources, password);
   }
 }
 
@@ -94,6 +127,9 @@ export default function TopBar() {
               disabled={selection.length === 0}
             >
               {t("top.extractSel")}
+            </button>
+            <button title={t("top.test")} onClick={() => void testIntegrity()}>
+              {t("top.test")}
             </button>
             <button title={t("top.close")} onClick={close}>
               ✕

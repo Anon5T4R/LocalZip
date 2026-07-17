@@ -15,12 +15,27 @@ use std::time::Instant;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-#[derive(Serialize, Clone, PartialEq)]
+#[derive(Serialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Zip,
     Tar,
     TarGz,
+    TarXz,
+    TarBz2,
+    TarZst,
+}
+
+/// Abre o fluxo de leitura de um tar já com o decodificador certo.
+fn tar_reader(file: fs::File, format: Format) -> Box<dyn Read> {
+    match format {
+        Format::Tar => Box::new(file),
+        Format::TarGz => Box::new(flate2::read::GzDecoder::new(file)),
+        Format::TarXz => Box::new(xz2::read::XzDecoder::new(file)),
+        Format::TarBz2 => Box::new(bzip2::read::BzDecoder::new(file)),
+        Format::TarZst => Box::new(zstd::stream::read::Decoder::new(file).expect("zstd")),
+        Format::Zip => unreachable!(),
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -54,14 +69,16 @@ pub fn detect_format(path: &str) -> Result<Format, String> {
         Ok(Format::Zip)
     } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
         Ok(Format::TarGz)
+    } else if lower.ends_with(".tar.xz") || lower.ends_with(".txz") {
+        Ok(Format::TarXz)
+    } else if lower.ends_with(".tar.bz2") || lower.ends_with(".tbz2") || lower.ends_with(".tbz") {
+        Ok(Format::TarBz2)
+    } else if lower.ends_with(".tar.zst") || lower.ends_with(".tzst") {
+        Ok(Format::TarZst)
     } else if lower.ends_with(".tar") {
         Ok(Format::Tar)
-    } else if lower.ends_with(".gz") {
-        // .gz solto (arquivo único) é tratado como tar.gz só se for tar por
-        // dentro; v0.1 não cobre .gz de arquivo único — mensagem honesta.
-        Err("formato .gz de arquivo único chega na v0.2".into())
     } else {
-        Err("formato não suportado (v0.1: zip, tar, tar.gz)".into())
+        Err("formato não suportado (zip, tar, tar.gz/xz/bz2/zst; 7z e rar na v0.3)".into())
     }
 }
 
@@ -127,14 +144,9 @@ pub fn open_archive(path: &str) -> Result<ArchiveInfo, String> {
                 });
             }
         }
-        Format::Tar | Format::TarGz => {
+        _ => {
             let file = fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-            let reader: Box<dyn Read> = if format == Format::TarGz {
-                Box::new(flate2::read::GzDecoder::new(file))
-            } else {
-                Box::new(file)
-            };
-            let mut ar = tar::Archive::new(reader);
+            let mut ar = tar::Archive::new(tar_reader(file, format));
             for entry in ar.entries().map_err(|e| e.to_string())? {
                 let entry = entry.map_err(|e| e.to_string())?;
                 let inner = norm_inner(&entry.path().map_err(|e| e.to_string())?.to_string_lossy());
@@ -279,8 +291,9 @@ pub fn extract(
     archive: String,
     dest: String,
     filter: Option<Vec<String>>,
+    password: Option<String>,
 ) {
-    let result = extract_inner(app, op_id, &cancel, &archive, &dest, &filter);
+    let result = extract_inner(app, op_id, &cancel, &archive, &dest, &filter, password.as_deref());
     emit_done(app, op_id, result, cancel.load(Ordering::Relaxed));
 }
 
@@ -291,6 +304,7 @@ fn extract_inner(
     archive: &str,
     dest: &str,
     filter: &Option<Vec<String>>,
+    password: Option<&str>,
 ) -> Result<Option<String>, String> {
     let dest_dir = PathBuf::from(dest);
     fs::create_dir_all(&dest_dir).map_err(|e| format!("{dest}: {e}"))?;
@@ -318,14 +332,19 @@ fn extract_inner(
                 if cancel.load(Ordering::Relaxed) {
                     return Err("canceled".into());
                 }
-                let mut f = match za.by_index(i) {
-                    Ok(f) => f,
-                    Err(zip::result::ZipError::UnsupportedArchive(msg))
-                        if msg.contains("Password") =>
-                    {
-                        return Err("arquivo protegido por senha (suporte chega na v0.2)".into())
-                    }
-                    Err(e) => return Err(e.to_string()),
+                let mut f = match password {
+                    Some(pw) => za
+                        .by_index_decrypt(i, pw.as_bytes())
+                        .map_err(|_| "senha incorreta ou arquivo corrompido".to_string())?,
+                    None => match za.by_index(i) {
+                        Ok(f) => f,
+                        Err(zip::result::ZipError::UnsupportedArchive(msg))
+                            if msg.contains("Password") =>
+                        {
+                            return Err("NEED_PASSWORD".into())
+                        }
+                        Err(e) => return Err(e.to_string()),
+                    },
                 };
                 let inner = norm_inner(f.name());
                 if inner.is_empty() || !selected(&inner, filter) {
@@ -357,17 +376,12 @@ fn extract_inner(
                 rep.file_done(&inner);
             }
         }
-        Format::Tar | Format::TarGz => {
+        _ => {
             // Passo 1: totais (streaming — lê os headers de novo na extração).
             let (mut total_files, mut total_bytes) = (0u64, 0u64);
             {
                 let file = fs::File::open(archive).map_err(|e| format!("{archive}: {e}"))?;
-                let reader: Box<dyn Read> = if format == Format::TarGz {
-                    Box::new(flate2::read::GzDecoder::new(file))
-                } else {
-                    Box::new(file)
-                };
-                let mut ar = tar::Archive::new(reader);
+                let mut ar = tar::Archive::new(tar_reader(file, format));
                 for entry in ar.entries().map_err(|e| e.to_string())? {
                     let entry = entry.map_err(|e| e.to_string())?;
                     let inner = norm_inner(&entry.path().map_err(|e| e.to_string())?.to_string_lossy());
@@ -383,12 +397,7 @@ fn extract_inner(
             let mut rep = Reporter::new(app, op_id, total_files, total_bytes);
 
             let file = fs::File::open(archive).map_err(|e| format!("{archive}: {e}"))?;
-            let reader: Box<dyn Read> = if format == Format::TarGz {
-                Box::new(flate2::read::GzDecoder::new(file))
-            } else {
-                Box::new(file)
-            };
-            let mut ar = tar::Archive::new(reader);
+            let mut ar = tar::Archive::new(tar_reader(file, format));
             for entry in ar.entries().map_err(|e| e.to_string())? {
                 if cancel.load(Ordering::Relaxed) {
                     return Err("canceled".into());
@@ -467,8 +476,9 @@ pub fn create(
     dest: String,
     format: String,
     sources: Vec<String>,
+    password: Option<String>,
 ) {
-    let result = create_inner(app, op_id, &cancel, &dest, &format, &sources);
+    let result = create_inner(app, op_id, &cancel, &dest, &format, &sources, password.as_deref());
     if result.is_err() {
         let _ = fs::remove_file(&dest); // não deixa arquivo pela metade
     }
@@ -482,6 +492,7 @@ fn create_inner(
     dest: &str,
     format: &str,
     sources: &[String],
+    password: Option<&str>,
 ) -> Result<Option<String>, String> {
     if sources.is_empty() {
         return Err("nada pra compactar".into());
@@ -493,9 +504,15 @@ fn create_inner(
     match format {
         "zip" => {
             let mut zw = zip::ZipWriter::new(out);
-            let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            // Sem anotar o tipo: `with_aes_encryption` amarra o lifetime da
+            // senha, então o `SimpleFileOptions` ('static) não serviria.
+            let mut options = zip::write::FileOptions::<()>::default()
                 .compression_method(zip::CompressionMethod::Deflated)
                 .large_file(true);
+            // Senha = AES-256 (o suporte padrão do WinRAR/7-Zip pra zip cifrado).
+            if let Some(pw) = password.filter(|p| !p.is_empty()) {
+                options = options.with_aes_encryption(zip::AesMode::Aes256, pw);
+            }
             for (disk, inner) in &files {
                 if cancel.load(Ordering::Relaxed) {
                     return Err("canceled".into());
@@ -540,6 +557,80 @@ fn create_inner(
     Ok(Some(dest.to_string()))
 }
 
+// ---------- testar integridade ----------
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrityResult {
+    pub ok: bool,
+    pub tested: u64,
+    /// Nome do primeiro item com erro (vazio se tudo ok).
+    pub bad: String,
+    pub error: Option<String>,
+}
+
+/// Lê TODO o conteúdo de cada item — o zip valida o CRC de cada arquivo na
+/// leitura; nos tar, ler até o fim detecta truncamento/corrupção do stream.
+pub fn test_integrity(archive: &str, password: Option<&str>) -> IntegrityResult {
+    match test_inner(archive, password) {
+        Ok(tested) => IntegrityResult { ok: true, tested, bad: String::new(), error: None },
+        Err((bad, error)) => IntegrityResult { ok: false, tested: 0, bad, error: Some(error) },
+    }
+}
+
+fn test_inner(archive: &str, password: Option<&str>) -> Result<u64, (String, String)> {
+    let format = detect_format(archive).map_err(|e| (String::new(), e))?;
+    let mut tested = 0u64;
+    let mut sink = [0u8; 256 * 1024];
+
+    match format {
+        Format::Zip => {
+            let file = fs::File::open(archive).map_err(|e| (String::new(), e.to_string()))?;
+            let mut za = zip::ZipArchive::new(file).map_err(|e| (String::new(), e.to_string()))?;
+            for i in 0..za.len() {
+                let mut f = match password {
+                    Some(pw) => za.by_index_decrypt(i, pw.as_bytes()),
+                    None => za.by_index(i),
+                }
+                .map_err(|e| (String::new(), e.to_string()))?;
+                let name = norm_inner(f.name());
+                if f.is_dir() {
+                    continue;
+                }
+                loop {
+                    match f.read(&mut sink) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(e) => return Err((name, e.to_string())),
+                    }
+                }
+                tested += 1;
+            }
+        }
+        _ => {
+            let file = fs::File::open(archive).map_err(|e| (String::new(), e.to_string()))?;
+            let mut ar = tar::Archive::new(tar_reader(file, format));
+            let entries = ar.entries().map_err(|e| (String::new(), e.to_string()))?;
+            for entry in entries {
+                let mut entry = entry.map_err(|e| (String::new(), e.to_string()))?;
+                let name = entry
+                    .path()
+                    .map(|p| norm_inner(&p.to_string_lossy()))
+                    .unwrap_or_default();
+                loop {
+                    match entry.read(&mut sink) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(e) => return Err((name, e.to_string())),
+                    }
+                }
+                tested += 1;
+            }
+        }
+    }
+    Ok(tested)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,6 +658,35 @@ mod tests {
         assert!(selected("a.txt", &f));
         assert!(!selected("docs2/z", &f));
         assert!(selected("qualquer", &None));
+    }
+
+    #[test]
+    fn zip_com_senha_roundtrip_e_integridade() {
+        // Cria um zip AES-256, testa a integridade com a senha certa e recusa
+        // a senha errada.
+        let base = std::env::temp_dir().join("localzip-test-pw");
+        let _ = fs::remove_dir_all(&base);
+        fs::write(base.join("../localzip-pw-src.txt"), b"segredo").ok();
+        let zip_path = base.join("p.zip");
+        fs::create_dir_all(&base).unwrap();
+        {
+            let out = fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(out);
+            let opt = zip::write::FileOptions::<()>::default()
+                .with_aes_encryption(zip::AesMode::Aes256, "abc123");
+            zw.start_file("s.txt", opt).unwrap();
+            zw.write_all(b"segredo").unwrap();
+            zw.finish().unwrap();
+        }
+        let info = open_archive(zip_path.to_str().unwrap()).unwrap();
+        assert!(info.entries.iter().any(|e| e.encrypted));
+
+        let ok = test_integrity(zip_path.to_str().unwrap(), Some("abc123"));
+        assert!(ok.ok, "senha certa deveria validar");
+        let bad = test_integrity(zip_path.to_str().unwrap(), Some("errada"));
+        assert!(!bad.ok, "senha errada deveria falhar");
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

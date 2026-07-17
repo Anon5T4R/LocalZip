@@ -28,7 +28,7 @@ const pt = {
   "empty.sub": "Abra um arquivo compactado ou crie um novo. Dá pra arrastar pra cá também.",
   "empty.open": "Abrir arquivo…",
   "empty.create": "Criar arquivo…",
-  "empty.formats": "v0.1: zip · tar · tar.gz (7z/senha na v0.2; rar na v0.3)",
+  "empty.formats": "zip (senha AES) · tar · tar.gz/xz/bz2/zst (7z e rar chegam na v0.3)",
 
   // TopBar
   "top.open": "Abrir…",
@@ -37,6 +37,7 @@ const pt = {
   "top.createTitle": "Criar arquivo compactado novo (Ctrl+N)",
   "top.extractAll": "Extrair tudo",
   "top.extractSel": "Extrair seleção",
+  "top.test": "Testar",
   "top.close": "Fechar arquivo",
   "top.settingsTitle": "Configurações",
   "top.up": "Pasta acima (Backspace)",
@@ -55,7 +56,21 @@ const pt = {
   "info.summary": "{files} arquivos · {size} ({packed} compactado)",
   "info.bomb":
     "⚠️ Este arquivo expande MUITO além do tamanho compactado (possível zip bomb). Extraia só se confiar na origem.",
-  "info.encrypted": "Este arquivo tem itens protegidos por senha — o suporte a senha chega na v0.2.",
+  "info.encrypted": "Este arquivo tem itens protegidos por senha — vou pedir a senha ao extrair.",
+
+  // Senha (v0.2)
+  "password.title": "Senha do arquivo",
+  "password.sub": "Este arquivo está protegido. Digite a senha pra extrair.",
+  "password.needed": "Este arquivo pede senha.",
+
+  // Testar integridade (v0.2)
+  "test.running": "Testando integridade…",
+  "test.ok": "Íntegro — {n} itens conferidos",
+  "test.bad": "Falha em “{name}”: {error}",
+
+  // Criar com senha (v0.2)
+  "create.password": "Senha (opcional)",
+  "create.passwordHint": "cifra AES-256",
 
   // Diálogos de extração
   "extract.chooseDest": "Escolha a pasta de destino",
@@ -108,7 +123,7 @@ const en: Record<MessageKey, string> = {
   "empty.sub": "Open an archive or create a new one. You can also drag one here.",
   "empty.open": "Open archive…",
   "empty.create": "Create archive…",
-  "empty.formats": "v0.1: zip · tar · tar.gz (7z/password in v0.2; rar in v0.3)",
+  "empty.formats": "zip (AES password) · tar · tar.gz/xz/bz2/zst (7z and rar in v0.3)",
 
   "top.open": "Open…",
   "top.openTitle": "Open archive (Ctrl+O)",
@@ -116,6 +131,7 @@ const en: Record<MessageKey, string> = {
   "top.createTitle": "Create a new archive (Ctrl+N)",
   "top.extractAll": "Extract all",
   "top.extractSel": "Extract selection",
+  "top.test": "Test",
   "top.close": "Close archive",
   "top.settingsTitle": "Settings",
   "top.up": "Up one folder (Backspace)",
@@ -132,7 +148,18 @@ const en: Record<MessageKey, string> = {
   "info.summary": "{files} files · {size} ({packed} packed)",
   "info.bomb":
     "⚠️ This archive expands FAR beyond its packed size (possible zip bomb). Only extract if you trust the source.",
-  "info.encrypted": "This archive has password-protected items — password support arrives in v0.2.",
+  "info.encrypted": "This archive has password-protected items — I'll ask for the password when extracting.",
+
+  "password.title": "Archive password",
+  "password.sub": "This archive is protected. Enter the password to extract.",
+  "password.needed": "This archive needs a password.",
+
+  "test.running": "Testing integrity…",
+  "test.ok": "Intact — {n} items checked",
+  "test.bad": "Failed on “{name}”: {error}",
+
+  "create.password": "Password (optional)",
+  "create.passwordHint": "AES-256 encryption",
 
   "extract.chooseDest": "Choose the destination folder",
   "extract.done": "Extracted to {dest}",
@@ -177,7 +204,7 @@ const es: Record<MessageKey, string> = {
   "empty.sub": "Abre un archivo comprimido o crea uno nuevo. También puedes arrastrarlo aquí.",
   "empty.open": "Abrir archivo…",
   "empty.create": "Crear archivo…",
-  "empty.formats": "v0.1: zip · tar · tar.gz (7z/contraseña en v0.2; rar en v0.3)",
+  "empty.formats": "zip (contraseña AES) · tar · tar.gz/xz/bz2/zst (7z y rar en v0.3)",
 
   "top.open": "Abrir…",
   "top.openTitle": "Abrir archivo comprimido (Ctrl+O)",
@@ -185,6 +212,7 @@ const es: Record<MessageKey, string> = {
   "top.createTitle": "Crear un archivo comprimido nuevo (Ctrl+N)",
   "top.extractAll": "Extraer todo",
   "top.extractSel": "Extraer selección",
+  "top.test": "Probar",
   "top.close": "Cerrar archivo",
   "top.settingsTitle": "Configuración",
   "top.up": "Carpeta superior (Backspace)",
@@ -202,7 +230,18 @@ const es: Record<MessageKey, string> = {
   "info.bomb":
     "⚠️ Este archivo se expande MUCHO más allá de su tamaño comprimido (posible zip bomb). Extrae solo si confías en el origen.",
   "info.encrypted":
-    "Este archivo tiene elementos protegidos con contraseña — el soporte llega en la v0.2.",
+    "Este archivo tiene elementos protegidos con contraseña — pediré la contraseña al extraer.",
+
+  "password.title": "Contraseña del archivo",
+  "password.sub": "Este archivo está protegido. Escribe la contraseña para extraer.",
+  "password.needed": "Este archivo pide contraseña.",
+
+  "test.running": "Probando integridad…",
+  "test.ok": "Íntegro — {n} elementos comprobados",
+  "test.bad": "Falló en “{name}”: {error}",
+
+  "create.password": "Contraseña (opcional)",
+  "create.passwordHint": "cifrado AES-256",
 
   "extract.chooseDest": "Elige la carpeta de destino",
   "extract.done": "Extraído en {dest}",

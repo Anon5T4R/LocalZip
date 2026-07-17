@@ -17,8 +17,13 @@ interface ZipState {
   close: () => void;
   setDir: (dir: string) => void;
   setSelection: (paths: string[], anchor?: number | null) => void;
-  startExtract: (dest: string, paths: string[] | null) => Promise<void>;
-  startCreate: (dest: string, format: "zip" | "targz", sources: string[]) => Promise<void>;
+  startExtract: (dest: string, paths: string[] | null, password?: string | null) => Promise<void>;
+  startCreate: (
+    dest: string,
+    format: "zip" | "targz",
+    sources: string[],
+    password?: string | null,
+  ) => Promise<void>;
   opProgress: (opId: number, p: RunningOp["progress"]) => void;
   opDone: (opId: number) => void;
 }
@@ -46,14 +51,14 @@ export const useZip = create<ZipState>((set, get) => ({
   setSelection: (selection, anchor) =>
     set((s) => ({ selection, anchor: anchor === undefined ? s.anchor : anchor })),
 
-  startExtract: async (dest, paths) => {
+  startExtract: async (dest, paths, password) => {
     const info = get().info;
     if (!info) return;
-    await startOp(set, "extract", () => backend.startExtract(info.path, dest, paths));
+    await startOp(set, "extract", () => backend.startExtract(info.path, dest, paths, password));
   },
 
-  startCreate: async (dest, format, sources) => {
-    await startOp(set, "create", () => backend.startCreate(dest, format, sources));
+  startCreate: async (dest, format, sources, password) => {
+    await startOp(set, "create", () => backend.startCreate(dest, format, sources, password));
   },
 
   opProgress: (opId, progress) =>

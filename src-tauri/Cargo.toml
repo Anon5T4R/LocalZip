@@ -1,6 +1,6 @@
 [package]
 name = "localzip"
-version = "0.1.0"
+version = "0.2.0"
 description = "LocalZip — compactador de arquivos 100% offline da suíte Local"
 authors = ["Taylor"]
 edition = "2021"
@@ -22,11 +22,15 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Formatos da v0.1: zip (ler/criar, deflate; AES na leitura) e tar(.gz).
-# 7z/xz/bz2/zst entram na v0.2; RAR (só extração) na v0.3.
-zip = "2"
+# zip com AES (criar E extrair com senha) + variantes tar. 7z e RAR (extração)
+# ficam pra v0.3 (API do sevenz-rust/unrar validada na máquina).
+zip = { version = "2", features = ["aes-crypto", "deflate", "bzip2", "zstd", "time"] }
 tar = "0.4"
 flate2 = "1"
+# tar.xz / tar.bz2 / tar.zst (descompressão).
+xz2 = "0.1"
+bzip2 = "0.5"
+zstd = "0.13"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"

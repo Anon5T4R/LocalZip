@@ -107,8 +107,12 @@ export function formatDate(ms: number, localeTag: string): string {
   );
 }
 
-/** O caminho parece um arquivo compactado que a v0.1 abre? */
+/** O caminho parece um arquivo compactado que a gente abre? */
 export function isSupportedArchive(path: string): boolean {
   const l = path.toLowerCase();
-  return l.endsWith(".zip") || l.endsWith(".tar") || l.endsWith(".tar.gz") || l.endsWith(".tgz");
+  return (
+    l.endsWith(".zip") ||
+    l.endsWith(".tar") ||
+    /\.(tar\.gz|tgz|tar\.xz|txz|tar\.bz2|tbz2|tbz|tar\.zst|tzst)$/.test(l)
+  );
 }

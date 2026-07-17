@@ -13,6 +13,7 @@ export default function CreateModal() {
   const sources = useUi((s) => s.createSources);
   const setCreateSources = useUi((s) => s.setCreateSources);
   const [format, setFormat] = useState<"zip" | "targz">("zip");
+  const [password, setPassword] = useState("");
 
   if (sources === null) return null;
 
@@ -78,12 +79,26 @@ export default function CreateModal() {
           </div>
         </div>
 
+        {format === "zip" && (
+          <div className="create-row">
+            <span className="muted">{t("create.password")}</span>
+            <input
+              type="password"
+              value={password}
+              placeholder={t("create.passwordHint")}
+              spellCheck={false}
+              style={{ width: 180 }}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+        )}
+
         <div className="modal-actions">
           <button onClick={() => setCreateSources(null)}>{t("dlg.cancel")}</button>
           <button
             className="primary"
             disabled={sources.length === 0}
-            onClick={() => void saveAndCreate(format, sources)}
+            onClick={() => void saveAndCreate(format, sources, format === "zip" ? password : "")}
           >
             {t("create.go")}
           </button>

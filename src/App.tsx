@@ -10,6 +10,7 @@ import CreateModal from "./components/CreateModal";
 import EmptyState from "./components/EmptyState";
 import EntryTable from "./components/EntryTable";
 import OpsPanel from "./components/OpsPanel";
+import PasswordModal from "./components/PasswordModal";
 import SettingsModal from "./components/SettingsModal";
 import Toasts from "./components/Toasts";
 import TopBar, { pickAndOpen } from "./components/TopBar";
@@ -40,6 +41,9 @@ export default function App() {
       zip.opDone(e.payload.opId);
       if (e.payload.canceled) {
         ui.pushToast("info", t("ops.canceled"));
+      } else if (!e.payload.ok && e.payload.error === "NEED_PASSWORD") {
+        // Fallback (o extractTo já pede a senha antes quando detecta cifra).
+        ui.pushToast("error", t("password.needed"));
       } else if (!e.payload.ok && e.payload.error) {
         ui.pushToast("error", t("toast.opFailed", { error: e.payload.error }));
       } else if (e.payload.ok && e.payload.output) {
@@ -120,6 +124,7 @@ export default function App() {
       <TopBar />
       {info ? <EntryTable /> : <EmptyState />}
       <CreateModal />
+      <PasswordModal />
       <SettingsModal />
       <OpsPanel />
       <Toasts />

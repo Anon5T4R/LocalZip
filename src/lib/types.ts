@@ -1,6 +1,6 @@
 /** Espelho dos structs do Rust (serde camelCase). */
 
-export type ArchiveFormat = "zip" | "tar" | "targz";
+export type ArchiveFormat = "zip" | "tar" | "targz" | "tarxz" | "tarbz2" | "tarzst";
 
 export interface AEntry {
   /** Caminho DENTRO do arquivo ("/" como separador, sem barra no fim). */

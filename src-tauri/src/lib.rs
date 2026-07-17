@@ -49,17 +49,18 @@ fn start_extract(
     archive: String,
     dest: String,
     paths: Option<Vec<String>>,
+    password: Option<String>,
 ) -> Result<u64, String> {
     let (op_id, cancel) = state.register();
     let handle = app.clone();
     std::thread::spawn(move || {
-        archive::extract(&handle, op_id, cancel, archive, dest, paths);
+        archive::extract(&handle, op_id, cancel, archive, dest, paths, password);
         handle.state::<OpsState>().finish(op_id);
     });
     Ok(op_id)
 }
 
-/// Cria um arquivo novo (`format`: "zip" | "targz") a partir das origens.
+/// Cria um arquivo novo (`format`: "zip" | "targz"; senha opcional só no zip).
 #[tauri::command(async)]
 fn start_create(
     app: AppHandle,
@@ -67,14 +68,21 @@ fn start_create(
     dest: String,
     format: String,
     sources: Vec<String>,
+    password: Option<String>,
 ) -> Result<u64, String> {
     let (op_id, cancel) = state.register();
     let handle = app.clone();
     std::thread::spawn(move || {
-        archive::create(&handle, op_id, cancel, dest, format, sources);
+        archive::create(&handle, op_id, cancel, dest, format, sources, password);
         handle.state::<OpsState>().finish(op_id);
     });
     Ok(op_id)
+}
+
+/// Testa a integridade lendo tudo (valida CRC no zip; trunca/corrompe no tar).
+#[tauri::command(async)]
+fn test_integrity(archive: String, password: Option<String>) -> archive::IntegrityResult {
+    archive::test_integrity(&archive, password.as_deref())
 }
 
 #[tauri::command(async)]
@@ -118,6 +126,7 @@ pub fn run() {
             open_archive,
             start_extract,
             start_create,
+            test_integrity,
             cancel_op,
             get_startup_file,
         ])

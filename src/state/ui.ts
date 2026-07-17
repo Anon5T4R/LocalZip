@@ -8,16 +8,25 @@ export interface Toast {
   text: string;
 }
 
+/** Pedido de senha pra extrair um zip cifrado. */
+export interface PasswordAsk {
+  dest: string;
+  paths: string[] | null;
+}
+
 interface UiState {
   theme: Theme;
   settingsOpen: boolean;
   /** Modal de criação (null = fechado); guarda as origens já escolhidas. */
   createSources: string[] | null;
+  /** Modal de senha na extração (null = fechado). */
+  passwordAsk: PasswordAsk | null;
   toasts: Toast[];
 
   setTheme: (t: Theme) => void;
   setSettingsOpen: (v: boolean) => void;
   setCreateSources: (v: string[] | null) => void;
+  setPasswordAsk: (v: PasswordAsk | null) => void;
   pushToast: (kind: Toast["kind"], text: string) => void;
   dismissToast: (id: number) => void;
 }
@@ -46,6 +55,7 @@ export const useUi = create<UiState>((set) => ({
   theme: loadTheme(),
   settingsOpen: false,
   createSources: null,
+  passwordAsk: null,
   toasts: [],
 
   setTheme: (theme) => {
@@ -55,6 +65,7 @@ export const useUi = create<UiState>((set) => ({
   },
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setCreateSources: (createSources) => set({ createSources }),
+  setPasswordAsk: (passwordAsk) => set({ passwordAsk }),
   pushToast: (kind, text) =>
     set((s) => ({ toasts: [...s.toasts, { id: nextToast++, kind, text }] })),
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),

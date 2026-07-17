@@ -13,16 +13,29 @@ export function startExtract(
   archive: string,
   dest: string,
   paths: string[] | null,
+  password?: string | null,
 ): Promise<number> {
-  return invoke("start_extract", { archive, dest, paths });
+  return invoke("start_extract", { archive, dest, paths, password: password ?? null });
 }
 
 export function startCreate(
   dest: string,
   format: "zip" | "targz",
   sources: string[],
+  password?: string | null,
 ): Promise<number> {
-  return invoke("start_create", { dest, format, sources });
+  return invoke("start_create", { dest, format, sources, password: password ?? null });
+}
+
+export interface IntegrityResult {
+  ok: boolean;
+  tested: number;
+  bad: string;
+  error: string | null;
+}
+
+export function testIntegrity(archive: string, password?: string | null): Promise<IntegrityResult> {
+  return invoke("test_integrity", { archive, password: password ?? null });
 }
 
 export function cancelOp(opId: number): Promise<void> {

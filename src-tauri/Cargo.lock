@@ -2040,8 +2040,9 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "localzip"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "bzip2",
  "flate2",
  "serde",
  "serde_json",
@@ -2051,7 +2052,9 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "xz2",
  "zip",
+ "zstd",
 ]
 
 [[package]]
