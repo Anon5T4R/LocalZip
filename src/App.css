@@ -37,6 +37,113 @@
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 }
 
+/* ---- Temas nomeados (paletas fixas; sobrepõem o accent do app) ---- */
+:root[data-theme="nature"] {
+  --bg: #f5f7f2;
+  --panel: #ffffff;
+  --panel-2: #eef2ea;
+  --text: #2e3a2e;
+  --muted: #6f7d6f;
+  --border: #e2e8dd;
+  --accent: #7a9e7e;
+  --accent-2: #e8b4c8;
+  --accent-ink: #1e2a1e;
+  --sel-bg: #e6efe1;
+  --danger: #c0492f;
+  --ok: #5a8f5e;
+  --warn-bg: #fdf4e6;
+  --warn-border: #e6c58a;
+  --err-bg: #fbecea;
+  --err-border: #e6a99b;
+  --shadow: 0 10px 30px rgba(60, 80, 50, 0.14);
+  --radius: 12px;
+  --term-bg: #ffffff;
+}
+:root[data-theme="darkblue"] {
+  --bg: #0d1520;
+  --panel: #131f30;
+  --panel-2: #1a2942;
+  --text: #e2e8f0;
+  --muted: #8595ad;
+  --border: #223049;
+  --accent: #3b82f6;
+  --accent-2: #60a5fa;
+  --accent-ink: #ffffff;
+  --sel-bg: #1e3a5f;
+  --danger: #f87171;
+  --ok: #4ade80;
+  --warn-bg: #2a1f12;
+  --warn-border: #7c5017;
+  --err-bg: #2a1414;
+  --err-border: #7f1d1d;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  --radius: 12px;
+  --term-bg: #0d1520;
+}
+:root[data-theme="calmgreen"] {
+  --bg: #f2f5f1;
+  --panel: #ffffff;
+  --panel-2: #e9efe7;
+  --text: #24302a;
+  --muted: #6a7a6f;
+  --border: #dde6dc;
+  --accent: #4f7d5e;
+  --accent-2: #6fa07e;
+  --accent-ink: #ffffff;
+  --sel-bg: #dcebd9;
+  --danger: #c0492f;
+  --ok: #4f7d5e;
+  --warn-bg: #fbf3e3;
+  --warn-border: #e0c184;
+  --err-bg: #fbecea;
+  --err-border: #e6a99b;
+  --shadow: 0 10px 30px rgba(40, 70, 50, 0.14);
+  --radius: 12px;
+  --term-bg: #ffffff;
+}
+:root[data-theme="pastelpink"] {
+  --bg: #fdf4f7;
+  --panel: #ffffff;
+  --panel-2: #f9eaf0;
+  --text: #3a2a30;
+  --muted: #8a7580;
+  --border: #f2dfe7;
+  --accent: #e8799f;
+  --accent-2: #f4a9c4;
+  --accent-ink: #3a2028;
+  --sel-bg: #fbe4ee;
+  --danger: #d84a6b;
+  --ok: #4f9d76;
+  --warn-bg: #fdf3e6;
+  --warn-border: #e9c78e;
+  --err-bg: #fdecef;
+  --err-border: #f0a9bc;
+  --shadow: 0 10px 30px rgba(120, 60, 90, 0.14);
+  --radius: 12px;
+  --term-bg: #ffffff;
+}
+:root[data-theme="punkprincess"] {
+  --bg: #120a1a;
+  --panel: #1a0f26;
+  --panel-2: #241533;
+  --text: #f0e6ff;
+  --muted: #9a86b5;
+  --border: #2c1c3d;
+  --accent: #ff2d95;
+  --accent-2: #2de2ff;
+  --accent-ink: #12061a;
+  --sel-bg: #33143a;
+  --danger: #ff5470;
+  --ok: #43e8a0;
+  --warn-bg: #2a1f12;
+  --warn-border: #7c5017;
+  --err-bg: #2a0f1a;
+  --err-border: #8a2444;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  --radius: 12px;
+  --term-bg: #120a1a;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -309,6 +416,7 @@ input {
 .segmented {
   display: flex;
   gap: 4px;
+  flex-wrap: wrap;
 }
 .settings-row {
   display: flex;
