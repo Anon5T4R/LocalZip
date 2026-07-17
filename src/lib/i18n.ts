@@ -28,7 +28,7 @@ const pt = {
   "empty.sub": "Abra um arquivo compactado ou crie um novo. Dá pra arrastar pra cá também.",
   "empty.open": "Abrir arquivo…",
   "empty.create": "Criar arquivo…",
-  "empty.formats": "zip (senha AES) · tar · tar.gz/xz/bz2/zst (7z e rar chegam na v0.3)",
+  "empty.formats": "zip (senha AES) · 7z (extração) · tar · tar.gz/xz/bz2/zst (rar na v0.4)",
 
   // TopBar
   "top.open": "Abrir…",
@@ -123,7 +123,7 @@ const en: Record<MessageKey, string> = {
   "empty.sub": "Open an archive or create a new one. You can also drag one here.",
   "empty.open": "Open archive…",
   "empty.create": "Create archive…",
-  "empty.formats": "zip (AES password) · tar · tar.gz/xz/bz2/zst (7z and rar in v0.3)",
+  "empty.formats": "zip (AES password) · 7z (extract) · tar · tar.gz/xz/bz2/zst (rar in v0.4)",
 
   "top.open": "Open…",
   "top.openTitle": "Open archive (Ctrl+O)",
@@ -204,7 +204,7 @@ const es: Record<MessageKey, string> = {
   "empty.sub": "Abre un archivo comprimido o crea uno nuevo. También puedes arrastrarlo aquí.",
   "empty.open": "Abrir archivo…",
   "empty.create": "Crear archivo…",
-  "empty.formats": "zip (contraseña AES) · tar · tar.gz/xz/bz2/zst (7z y rar en v0.3)",
+  "empty.formats": "zip (contraseña AES) · 7z (extracción) · tar · tar.gz/xz/bz2/zst (rar en v0.4)",
 
   "top.open": "Abrir…",
   "top.openTitle": "Abrir archivo comprimido (Ctrl+O)",

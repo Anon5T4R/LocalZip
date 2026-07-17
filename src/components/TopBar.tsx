@@ -12,7 +12,7 @@ export async function pickAndOpen() {
     filters: [
       {
         name: "Arquivos compactados",
-        extensions: ["zip", "tar", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "tbz", "zst", "tzst"],
+        extensions: ["zip", "7z", "tar", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "tbz", "zst", "tzst"],
       },
     ],
   });

@@ -1,6 +1,6 @@
 [package]
 name = "localzip"
-version = "0.2.0"
+version = "0.3.0"
 description = "LocalZip — compactador de arquivos 100% offline da suíte Local"
 authors = ["Taylor"]
 edition = "2021"
@@ -31,6 +31,7 @@ flate2 = "1"
 xz2 = "0.1"
 bzip2 = "0.5"
 zstd = "0.13"
+sevenz-rust2 = "0.21.3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"

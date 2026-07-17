@@ -112,6 +112,7 @@ export function isSupportedArchive(path: string): boolean {
   const l = path.toLowerCase();
   return (
     l.endsWith(".zip") ||
+    l.endsWith(".7z") ||
     l.endsWith(".tar") ||
     /\.(tar\.gz|tgz|tar\.xz|txz|tar\.bz2|tbz2|tbz|tar\.zst|tzst)$/.test(l)
   );

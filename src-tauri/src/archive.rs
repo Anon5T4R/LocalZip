@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
+use sevenz_rust2::{ArchiveReader, Password};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Serialize, Clone, Copy, PartialEq)]
@@ -24,6 +25,7 @@ pub enum Format {
     TarXz,
     TarBz2,
     TarZst,
+    SevenZ,
 }
 
 /// Abre o fluxo de leitura de um tar já com o decodificador certo.
@@ -34,7 +36,7 @@ fn tar_reader(file: fs::File, format: Format) -> Box<dyn Read> {
         Format::TarXz => Box::new(xz2::read::XzDecoder::new(file)),
         Format::TarBz2 => Box::new(bzip2::read::BzDecoder::new(file)),
         Format::TarZst => Box::new(zstd::stream::read::Decoder::new(file).expect("zstd")),
-        Format::Zip => unreachable!(),
+        Format::Zip | Format::SevenZ => unreachable!(),
     }
 }
 
@@ -77,8 +79,10 @@ pub fn detect_format(path: &str) -> Result<Format, String> {
         Ok(Format::TarZst)
     } else if lower.ends_with(".tar") {
         Ok(Format::Tar)
+    } else if lower.ends_with(".7z") {
+        Ok(Format::SevenZ)
     } else {
-        Err("formato não suportado (zip, tar, tar.gz/xz/bz2/zst; 7z e rar na v0.3)".into())
+        Err("formato não suportado (zip, 7z, tar, tar.gz/xz/bz2/zst; rar na v0.4)".into())
     }
 }
 
@@ -141,6 +145,27 @@ pub fn open_archive(path: &str) -> Result<ArchiveInfo, String> {
                     compressed: f.compressed_size(),
                     modified_ms: zip_dos_time_ms(&f),
                     encrypted: f.encrypted(),
+                });
+            }
+        }
+        Format::SevenZ => {
+            // Lê só o cabeçalho (metadados de todos os arquivos), sem descompactar.
+            let reader = ArchiveReader::open(path, Password::empty()).map_err(|e| e.to_string())?;
+            for f in &reader.archive().files {
+                let inner = norm_inner(&f.name);
+                if inner.is_empty() {
+                    continue;
+                }
+                if !f.is_directory {
+                    total_size += f.size;
+                }
+                entries.push(AEntry {
+                    path: inner,
+                    is_dir: f.is_directory,
+                    size: f.size,
+                    compressed: 0,
+                    modified_ms: 0,
+                    encrypted: false,
                 });
             }
         }
@@ -376,6 +401,64 @@ fn extract_inner(
                 rep.file_done(&inner);
             }
         }
+        Format::SevenZ => {
+            let pw = password.map(Password::from).unwrap_or_else(Password::empty);
+            let mut reader = ArchiveReader::open(archive, pw).map_err(|e| e.to_string())?;
+            let (mut total_files, mut total_bytes) = (0u64, 0u64);
+            for f in &reader.archive().files {
+                let inner = norm_inner(&f.name);
+                if !inner.is_empty() && !f.is_directory && selected(&inner, filter) {
+                    total_files += 1;
+                    total_bytes += f.size;
+                }
+            }
+            let mut rep = Reporter::new(app, op_id, total_files, total_bytes);
+            // 7z costuma ser sólido: `for_each_entries` decodifica em sequência.
+            let r = reader.for_each_entries(|entry, rd| {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(sevenz_rust2::Error::Other("canceled".into()));
+                }
+                let inner = norm_inner(&entry.name);
+                if inner.is_empty() || !selected(&inner, filter) {
+                    return Ok(true);
+                }
+                let target =
+                    safe_join(&dest_dir, &inner).map_err(|e| sevenz_rust2::Error::Other(e.into()))?;
+                if entry.is_directory {
+                    fs::create_dir_all(&target)?;
+                    return Ok(true);
+                }
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut out = fs::File::create(&target)?;
+                let mut buf = vec![0u8; 512 * 1024];
+                loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        drop(out);
+                        let _ = fs::remove_file(&target);
+                        return Err(sevenz_rust2::Error::Other("canceled".into()));
+                    }
+                    let n = rd.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    out.write_all(&buf[..n])?;
+                    rep.bytes(n as u64, &inner);
+                }
+                rep.file_done(&inner);
+                Ok(true)
+            });
+            if cancel.load(Ordering::Relaxed) {
+                return Err("canceled".into());
+            }
+            match r {
+                Ok(_) => {}
+                Err(sevenz_rust2::Error::PasswordRequired)
+                | Err(sevenz_rust2::Error::MaybeBadPassword(_)) => return Err("NEED_PASSWORD".into()),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
         _ => {
             // Passo 1: totais (streaming — lê os headers de novo na extração).
             let (mut total_files, mut total_bytes) = (0u64, 0u64);
@@ -607,6 +690,31 @@ fn test_inner(archive: &str, password: Option<&str>) -> Result<u64, (String, Str
                 tested += 1;
             }
         }
+        Format::SevenZ => {
+            let pw = password.map(Password::from).unwrap_or_else(Password::empty);
+            let mut reader =
+                ArchiveReader::open(archive, pw).map_err(|e| (String::new(), e.to_string()))?;
+            let count = reader
+                .archive()
+                .files
+                .iter()
+                .filter(|f| !f.is_directory && f.has_stream)
+                .count() as u64;
+            reader
+                .for_each_entries(|_entry, rd| {
+                    let mut buf = [0u8; 256 * 1024];
+                    loop {
+                        match rd.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(_) => {}
+                            Err(e) => return Err(sevenz_rust2::Error::Other(e.to_string().into())),
+                        }
+                    }
+                    Ok(true)
+                })
+                .map_err(|e| (String::new(), e.to_string()))?;
+            tested = count;
+        }
         _ => {
             let file = fs::File::open(archive).map_err(|e| (String::new(), e.to_string()))?;
             let mut ar = tar::Archive::new(tar_reader(file, format));
@@ -715,6 +823,30 @@ mod tests {
         assert_eq!(info.total_size, 14);
         assert!(!info.bomb_suspect);
         assert!(info.entries.iter().any(|e| e.path == "src/sub/b.txt"));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn sevenz_abre_lista_e_valida() {
+        // Cria um .7z de verdade (via o próprio crate), lista o índice sem
+        // extrair e valida a integridade lendo/decodificando todo o conteúdo.
+        let base = std::env::temp_dir().join("localzip-test-7z");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("src/sub")).unwrap();
+        fs::write(base.join("src/a.txt"), b"conteudo a").unwrap();
+        fs::write(base.join("src/sub/b.txt"), b"bbbb").unwrap();
+        let z = base.join("t.7z");
+        sevenz_rust2::compress_to_path(base.join("src"), &z).unwrap();
+
+        let info = open_archive(z.to_str().unwrap()).unwrap();
+        assert!(matches!(info.format, Format::SevenZ));
+        assert!(info.entries.iter().any(|e| e.path.ends_with("a.txt")));
+        assert!(info.entries.iter().any(|e| e.path.ends_with("b.txt")));
+
+        let r = test_integrity(z.to_str().unwrap(), None);
+        assert!(r.ok, "7z íntegro deveria validar: {:?}", r.error);
+        assert!(r.tested >= 2);
 
         let _ = fs::remove_dir_all(&base);
     }
