@@ -1,6 +1,6 @@
 [package]
 name = "localzip"
-version = "0.4.1"
+version = "0.4.2"
 description = "LocalZip — compactador de arquivos 100% offline da suíte Local"
 authors = ["Taylor"]
 edition = "2021"
