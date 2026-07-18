@@ -59,13 +59,32 @@ describe("crumbsOf / parentDir", () => {
 });
 
 describe("isSupportedArchive / formatBytes", () => {
-  it("extensões da v0.1", () => {
+  // Este teste ficou PARA TRÁS da implementação: afirmava `.7z === false`, mas o
+  // 7z entrou na v0.3 (extração via `sevenz-rust2`, puro Rust) e os alvos
+  // xz/bz2/zst entraram na v0.2 — nenhum deles tinha cobertura. O CI ficou
+  // vermelho desde então. Feature nova sem teste atualizado é teste que vira
+  // alarme falso e depois é ignorado.
+  it("extensões suportadas (v0.1 zip/tar, v0.2 xz/bz2/zst, v0.3 7z)", () => {
     expect(isSupportedArchive("x.ZIP")).toBe(true);
+    expect(isSupportedArchive("x.tar")).toBe(true);
     expect(isSupportedArchive("x.tar.gz")).toBe(true);
     expect(isSupportedArchive("x.tgz")).toBe(true);
-    expect(isSupportedArchive("x.tar")).toBe(true);
-    expect(isSupportedArchive("x.7z")).toBe(false);
+    expect(isSupportedArchive("x.tar.xz")).toBe(true);
+    expect(isSupportedArchive("x.txz")).toBe(true);
+    expect(isSupportedArchive("x.tar.bz2")).toBe(true);
+    expect(isSupportedArchive("x.tbz2")).toBe(true);
+    expect(isSupportedArchive("x.tbz")).toBe(true);
+    expect(isSupportedArchive("x.tar.zst")).toBe(true);
+    expect(isSupportedArchive("x.tzst")).toBe(true);
+    expect(isSupportedArchive("x.7z")).toBe(true);
+  });
+
+  it("NÃO suportadas", () => {
+    // RAR é decisão de escopo, não esquecimento: criar RAR está fora (formato
+    // proprietário) e extrair depende de crate puro-Rust, ainda não avaliado.
     expect(isSupportedArchive("x.rar")).toBe(false);
+    expect(isSupportedArchive("x.txt")).toBe(false);
+    expect(isSupportedArchive("x.gz")).toBe(false); // .gz solto não é arquivo-contêiner
   });
 
   it("bytes legíveis", () => {
