@@ -2,6 +2,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import * as backend from "../lib/backend";
 import { t } from "../lib/i18n";
 import { crumbsOf, isSupportedArchive } from "../lib/zpath";
+import { EDITABLE_FORMATS } from "../lib/types";
 import { useUi } from "../state/ui";
 import { useZip } from "../state/store";
 
@@ -12,7 +13,11 @@ export async function pickAndOpen() {
     filters: [
       {
         name: "Arquivos compactados",
-        extensions: ["zip", "7z", "tar", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "tbz", "zst", "tzst"],
+        // `001`/`002`… = volumes de corte cru; `r00`… = volume RAR antigo.
+        extensions: [
+          "zip", "rar", "7z", "tar", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "tbz", "zst", "tzst",
+          "z01", "001", "002", "003", "r00", "r01",
+        ],
       },
     ],
   });
@@ -70,6 +75,30 @@ export async function testIntegrity() {
   }
 }
 
+/** Escolhe arquivos do disco e acrescenta ao zip aberto (sem re-extrair). */
+export async function addToArchive() {
+  const info = useZip.getState().info;
+  if (!info) return;
+  const picked = await open({ multiple: true, title: t("top.add") });
+  const paths = Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
+  if (paths.length === 0) return;
+  // Zip cifrado: as entradas NOVAS também têm que ir cifradas, senão o arquivo
+  // fica meio protegido e meio não — o que ninguém espera.
+  let password: string | null = null;
+  if (info.entries.some((e) => e.encrypted)) {
+    password = window.prompt(t("password.title")) || "";
+    if (!password) return;
+  }
+  await useZip.getState().startUpdate(paths, [], password);
+}
+
+/** Tira do zip os itens selecionados (reconstrói sem descompactar o resto). */
+export async function removeFromArchive(paths: string[]) {
+  if (paths.length === 0) return;
+  if (!window.confirm(t("update.confirmRemove", { n: paths.length }))) return;
+  await useZip.getState().startUpdate([], paths, null);
+}
+
 /** Pergunta o destino do arquivo novo e dispara a compactação. */
 export async function saveAndCreate(format: "zip" | "targz", sources: string[], password = "") {
   const first = sources[0]?.split(/[\\/]/).pop() ?? "arquivo";
@@ -97,6 +126,9 @@ export default function TopBar() {
 
   const crumbs = crumbsOf(dir);
   const archiveName = info?.path.split(/[\\/]/).pop();
+  // Só o zip (e não um zip dividido em volumes) aceita adicionar/remover.
+  const editable =
+    !!info && EDITABLE_FORMATS.includes(info.format) && !/\.\d{3,}$/.test(info.path);
 
   return (
     <div className="topbar">
@@ -137,6 +169,20 @@ export default function TopBar() {
             >
               {t("top.extractSel")}
             </button>
+            {editable && (
+              <>
+                <button title={t("top.addTitle")} onClick={() => void addToArchive()}>
+                  {t("top.add")}
+                </button>
+                <button
+                  title={t("top.removeTitle")}
+                  onClick={() => void removeFromArchive(selection)}
+                  disabled={selection.length === 0}
+                >
+                  {t("top.remove")}
+                </button>
+              </>
+            )}
             <button title={t("top.test")} onClick={() => void testIntegrity()}>
               {t("top.test")}
             </button>

@@ -1,6 +1,17 @@
 /** Espelho dos structs do Rust (serde camelCase). */
 
-export type ArchiveFormat = "zip" | "tar" | "targz" | "tarxz" | "tarbz2" | "tarzst";
+export type ArchiveFormat =
+  | "zip"
+  | "rar"
+  | "sevenz"
+  | "tar"
+  | "targz"
+  | "tarxz"
+  | "tarbz2"
+  | "tarzst";
+
+/** Formatos que a gente sabe ALTERAR (adicionar/remover) — o resto é só leitura. */
+export const EDITABLE_FORMATS: ArchiveFormat[] = ["zip"];
 
 export interface AEntry {
   /** Caminho DENTRO do arquivo ("/" como separador, sem barra no fim). */
@@ -38,7 +49,7 @@ export interface OpDone {
   output: string | null;
 }
 
-export type OpKind = "extract" | "create";
+export type OpKind = "extract" | "create" | "update";
 
 export interface RunningOp {
   opId: number;

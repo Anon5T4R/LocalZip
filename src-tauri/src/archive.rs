@@ -6,7 +6,7 @@
 //! destino); razão de expansão suspeita liga o aviso de zip bomb na UI.
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,6 +15,9 @@ use std::time::Instant;
 use serde::Serialize;
 use sevenz_rust2::{ArchiveReader, Password};
 use tauri::{AppHandle, Emitter};
+
+use crate::rar;
+use crate::split::{self, SplitReader};
 
 #[derive(Serialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -26,18 +29,33 @@ pub enum Format {
     TarBz2,
     TarZst,
     SevenZ,
+    Rar,
 }
 
 /// Abre o fluxo de leitura de um tar já com o decodificador certo.
-fn tar_reader(file: fs::File, format: Format) -> Box<dyn Read> {
+fn tar_reader(file: SplitReader, format: Format) -> Box<dyn Read> {
     match format {
         Format::Tar => Box::new(file),
         Format::TarGz => Box::new(flate2::read::GzDecoder::new(file)),
         Format::TarXz => Box::new(xz2::read::XzDecoder::new(file)),
         Format::TarBz2 => Box::new(bzip2::read::BzDecoder::new(file)),
         Format::TarZst => Box::new(zstd::stream::read::Decoder::new(file).expect("zstd")),
-        Format::Zip | Format::SevenZ => unreachable!(),
+        Format::Zip | Format::SevenZ | Format::Rar => unreachable!(),
     }
+}
+
+/// Abre o arquivo pra leitura — um arquivo simples OU um conjunto de volumes de
+/// corte cru (`.zip.001`, `.7z.002`, …) apresentado como UM fluxo só.
+///
+/// Antes disso, barra o zip multi-disco de verdade (`.z01`), que NÃO é corte
+/// cru: emendar os volumes não resolve (os deslocamentos do diretório central
+/// são relativos ao disco), e sem essa checagem o crate `zip` estoura um
+/// "invalid Zip archive" que não ajuda ninguém.
+fn open_reader(path: &str) -> Result<SplitReader, String> {
+    if split::multi_disk_zip(Path::new(path)) {
+        return Err("MULTI_DISK_ZIP".into());
+    }
+    SplitReader::open(path)
 }
 
 #[derive(Serialize, Clone)]
@@ -66,8 +84,13 @@ pub struct ArchiveInfo {
 }
 
 pub fn detect_format(path: &str) -> Result<Format, String> {
-    let lower = path.to_lowercase();
-    if lower.ends_with(".zip") {
+    // Volume de corte cru: o formato mora no nome SEM o sufixo numérico
+    // (`foo.zip.001` é um zip; `foo.tar.gz.002` é um tar.gz).
+    let base = split::volume_base_name(Path::new(path)).unwrap_or_else(|| path.to_string());
+    let lower = base.to_lowercase();
+    if lower.ends_with(".rar") || crate::rar::is_old_volume_name(&lower) {
+        Ok(Format::Rar)
+    } else if lower.ends_with(".zip") {
         Ok(Format::Zip)
     } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
         Ok(Format::TarGz)
@@ -82,12 +105,12 @@ pub fn detect_format(path: &str) -> Result<Format, String> {
     } else if lower.ends_with(".7z") {
         Ok(Format::SevenZ)
     } else {
-        Err("formato não suportado (zip, 7z, tar, tar.gz/xz/bz2/zst; rar na v0.4)".into())
+        Err("formato não suportado (zip, rar, 7z, tar, tar.gz/xz/bz2/zst)".into())
     }
 }
 
 /// Normaliza um caminho interno: "/" como separador, sem "./" nem barra final.
-fn norm_inner(raw: &str) -> String {
+pub(crate) fn norm_inner(raw: &str) -> String {
     let s = raw.replace('\\', "/");
     let s = s.strip_prefix("./").unwrap_or(&s);
     s.trim_matches('/').to_string()
@@ -117,14 +140,26 @@ fn zip_dos_time_ms(f: &zip::read::ZipFile) -> i64 {
 
 pub fn open_archive(path: &str) -> Result<ArchiveInfo, String> {
     let format = detect_format(path)?;
-    let meta = fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-    let archive_bytes = meta.len();
+    // Num conjunto de volumes, "o tamanho do arquivo" é a SOMA dos volumes —
+    // usar só o `.001` faria a razão de expansão mentir e ligar o alarme de
+    // zip bomb em qualquer arquivo dividido.
+    let archive_bytes = match format {
+        Format::Rar => rar::volume_set(Path::new(path))
+            .iter()
+            .filter_map(|p| fs::metadata(p).ok().map(|m| m.len()))
+            .sum(),
+        _ => open_reader(path)?.total(),
+    };
     let mut entries: Vec<AEntry> = Vec::new();
     let mut total_size = 0u64;
 
     match format {
+        Format::Rar => {
+            entries = rar::list(path, None)?;
+            total_size = entries.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
+        }
         Format::Zip => {
-            let file = fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+            let file = open_reader(path)?;
             let mut za = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
             for i in 0..za.len() {
                 // by_index_raw: lê só o cabeçalho, sem descompactar.
@@ -150,7 +185,8 @@ pub fn open_archive(path: &str) -> Result<ArchiveInfo, String> {
         }
         Format::SevenZ => {
             // Lê só o cabeçalho (metadados de todos os arquivos), sem descompactar.
-            let reader = ArchiveReader::open(path, Password::empty()).map_err(|e| e.to_string())?;
+            let reader = ArchiveReader::new(open_reader(path)?, Password::empty())
+                .map_err(|e| e.to_string())?;
             for f in &reader.archive().files {
                 let inner = norm_inner(&f.name);
                 if inner.is_empty() {
@@ -170,7 +206,7 @@ pub fn open_archive(path: &str) -> Result<ArchiveInfo, String> {
             }
         }
         _ => {
-            let file = fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+            let file = open_reader(path)?;
             let mut ar = tar::Archive::new(tar_reader(file, format));
             for entry in ar.entries().map_err(|e| e.to_string())? {
                 let entry = entry.map_err(|e| e.to_string())?;
@@ -234,9 +270,11 @@ pub struct OpDone {
     pub output: Option<String>,
 }
 
-struct Reporter<'a> {
+/// O `AppHandle` é DONO (não emprestado) porque o `rar.rs` precisa mandar o
+/// Reporter pra dentro de um `Box<dyn Write>` `'static` — ver `rar::CountingWriter`.
+pub(crate) struct Reporter {
     /// `None` nos testes (sem runtime Tauri) — aí nada é emitido.
-    app: Option<&'a AppHandle>,
+    app: Option<AppHandle>,
     op_id: u64,
     done_files: u64,
     total_files: u64,
@@ -245,23 +283,28 @@ struct Reporter<'a> {
     last: Instant,
 }
 
-impl<'a> Reporter<'a> {
-    fn new(app: Option<&'a AppHandle>, op_id: u64, total_files: u64, total_bytes: u64) -> Self {
+impl Reporter {
+    pub(crate) fn new(
+        app: Option<AppHandle>,
+        op_id: u64,
+        total_files: u64,
+        total_bytes: u64,
+    ) -> Self {
         Self { app, op_id, done_files: 0, total_files, done_bytes: 0, total_bytes, last: Instant::now() }
     }
-    fn bytes(&mut self, n: u64, current: &str) {
+    pub(crate) fn bytes(&mut self, n: u64, current: &str) {
         self.done_bytes += n;
         if self.last.elapsed().as_millis() >= 150 {
             self.emit(current);
         }
     }
-    fn file_done(&mut self, current: &str) {
+    pub(crate) fn file_done(&mut self, current: &str) {
         self.done_files += 1;
         self.emit(current);
     }
     fn emit(&mut self, current: &str) {
         self.last = Instant::now();
-        let Some(app) = self.app else { return };
+        let Some(app) = self.app.as_ref() else { return };
         let _ = app.emit(
             "zipop-progress",
             OpProgress {
@@ -289,7 +332,7 @@ fn emit_done(app: &AppHandle, op_id: u64, result: Result<Option<String>, String>
 
 /// Junta o destino com um caminho interno SANITIZADO (zip-slip: componente
 /// ".."/absoluto/unidade é rejeitado — nada escapa do destino).
-fn safe_join(dest: &Path, inner: &str) -> Result<PathBuf, String> {
+pub(crate) fn safe_join(dest: &Path, inner: &str) -> Result<PathBuf, String> {
     let mut out = dest.to_path_buf();
     for comp in Path::new(&inner.replace('\\', "/")).components() {
         match comp {
@@ -302,7 +345,7 @@ fn safe_join(dest: &Path, inner: &str) -> Result<PathBuf, String> {
 }
 
 /// O item `inner` está entre os selecionados? (igual ou descendente.)
-fn selected(inner: &str, filter: &Option<Vec<String>>) -> bool {
+pub(crate) fn selected(inner: &str, filter: &Option<Vec<String>>) -> bool {
     match filter {
         None => true,
         Some(list) => list
@@ -328,7 +371,7 @@ pub fn extract(
 fn extract_inner(
     app: Option<&AppHandle>,
     op_id: u64,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     archive: &str,
     dest: &str,
     filter: &Option<Vec<String>>,
@@ -339,8 +382,11 @@ fn extract_inner(
     let format = detect_format(archive)?;
 
     match format {
+        Format::Rar => {
+            rar::extract(app, op_id, cancel, archive, &dest_dir, filter, password)?;
+        }
         Format::Zip => {
-            let file = fs::File::open(archive).map_err(|e| format!("{archive}: {e}"))?;
+            let file = open_reader(archive)?;
             let mut za = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
             // Totais do que foi selecionado (progresso honesto).
@@ -354,7 +400,7 @@ fn extract_inner(
                     total_bytes += f.size();
                 }
             }
-            let mut rep = Reporter::new(app, op_id, total_files, total_bytes);
+            let mut rep = Reporter::new(app.cloned(), op_id, total_files, total_bytes);
 
             for i in 0..za.len() {
                 if cancel.load(Ordering::Relaxed) {
@@ -416,7 +462,8 @@ fn extract_inner(
         }
         Format::SevenZ => {
             let pw = password.map(Password::from).unwrap_or_else(Password::empty);
-            let mut reader = ArchiveReader::open(archive, pw).map_err(|e| e.to_string())?;
+            let mut reader =
+                ArchiveReader::new(open_reader(archive)?, pw).map_err(|e| e.to_string())?;
             let (mut total_files, mut total_bytes) = (0u64, 0u64);
             for f in &reader.archive().files {
                 let inner = norm_inner(&f.name);
@@ -425,7 +472,7 @@ fn extract_inner(
                     total_bytes += f.size;
                 }
             }
-            let mut rep = Reporter::new(app, op_id, total_files, total_bytes);
+            let mut rep = Reporter::new(app.cloned(), op_id, total_files, total_bytes);
             // 7z costuma ser sólido: `for_each_entries` decodifica em sequência.
             let r = reader.for_each_entries(|entry, rd| {
                 if cancel.load(Ordering::Relaxed) {
@@ -481,7 +528,7 @@ fn extract_inner(
             // Passo 1: totais (streaming — lê os headers de novo na extração).
             let (mut total_files, mut total_bytes) = (0u64, 0u64);
             {
-                let file = fs::File::open(archive).map_err(|e| format!("{archive}: {e}"))?;
+                let file = open_reader(archive)?;
                 let mut ar = tar::Archive::new(tar_reader(file, format));
                 for entry in ar.entries().map_err(|e| e.to_string())? {
                     let entry = entry.map_err(|e| e.to_string())?;
@@ -495,9 +542,9 @@ fn extract_inner(
                     }
                 }
             }
-            let mut rep = Reporter::new(app, op_id, total_files, total_bytes);
+            let mut rep = Reporter::new(app.cloned(), op_id, total_files, total_bytes);
 
-            let file = fs::File::open(archive).map_err(|e| format!("{archive}: {e}"))?;
+            let file = open_reader(archive)?;
             let mut ar = tar::Archive::new(tar_reader(file, format));
             for entry in ar.entries().map_err(|e| e.to_string())? {
                 if cancel.load(Ordering::Relaxed) {
@@ -599,7 +646,7 @@ fn create_inner(
         return Err("nada pra compactar".into());
     }
     let (files, total_bytes) = walk_sources(sources)?;
-    let mut rep = Reporter::new(Some(app), op_id, files.len() as u64, total_bytes);
+    let mut rep = Reporter::new(Some(app.clone()), op_id, files.len() as u64, total_bytes);
     let out = fs::File::create(dest).map_err(|e| format!("{dest}: {e}"))?;
 
     match format {
@@ -658,6 +705,188 @@ fn create_inner(
     Ok(Some(dest.to_string()))
 }
 
+// ---------- adicionar / remover num zip existente ----------
+
+/// Adiciona e/ou remove itens de um zip **sem descompactar o que já estava lá**.
+///
+/// Dois caminhos, e a diferença importa:
+///
+/// * **Só adicionar, sem colisão de nome** → `ZipWriter::new_append`. O arquivo
+///   é aberto pra escrita, o cursor vai pro fim dos dados existentes, os novos
+///   entram e só o diretório central é reescrito. Os bytes antigos **não são
+///   nem lidos**. É o caminho de custo O(novos).
+/// * **Remover, ou sobrescrever um nome que já existe** → reconstrói num
+///   temporário e troca no fim. Mesmo aqui nada é descompactado: cada entrada
+///   preservada passa por `raw_copy_file`, que copia o fluxo JÁ COMPRIMIDO com
+///   o CRC e o método originais. Custo O(bytes comprimidos), não O(bytes
+///   descompactados) — e sem perda de qualidade nem re-cifragem.
+///
+/// A prova de que não re-comprime está no teste `atualizar_nao_recomprime`:
+/// ele compara `compressed_size` e CRC de cada sobrevivente antes e depois.
+pub fn update(
+    app: &AppHandle,
+    op_id: u64,
+    cancel: Arc<AtomicBool>,
+    archive: String,
+    add: Vec<String>,
+    remove: Vec<String>,
+    password: Option<String>,
+) {
+    let result =
+        update_inner(Some(app), op_id, &cancel, &archive, &add, &remove, password.as_deref());
+    emit_done(app, op_id, result, cancel.load(Ordering::Relaxed));
+}
+
+fn update_inner(
+    app: Option<&AppHandle>,
+    op_id: u64,
+    cancel: &Arc<AtomicBool>,
+    archive: &str,
+    add: &[String],
+    remove: &[String],
+    password: Option<&str>,
+) -> Result<Option<String>, String> {
+    if !matches!(detect_format(archive)?, Format::Zip) {
+        return Err("UPDATE_ONLY_ZIP".into());
+    }
+    if split::volume_parts(Path::new(archive)).is_some() {
+        // Escrever de volta num conjunto dividido exigiria re-picar os volumes;
+        // o corte cru é só-leitura por decisão de escopo.
+        return Err("UPDATE_NOT_ON_SPLIT".into());
+    }
+    if add.is_empty() && remove.is_empty() {
+        return Ok(Some(archive.to_string()));
+    }
+
+    let (files, total_bytes) = if add.is_empty() {
+        (Vec::new(), 0)
+    } else {
+        walk_sources(add)?
+    };
+    let novos: std::collections::HashSet<&str> = files.iter().map(|(_, i)| i.as_str()).collect();
+
+    // Quem sai: o filtro de remoção OU um nome que os novos vão sobrescrever.
+    let rm_filter = if remove.is_empty() { None } else { Some(remove.to_vec()) };
+    let mut colide = false;
+    let mut sobrevivem = 0u64;
+    {
+        let za_file = fs::File::open(archive).map_err(|e| format!("{archive}: {e}"))?;
+        let mut za = zip::ZipArchive::new(za_file).map_err(|e| e.to_string())?;
+        for i in 0..za.len() {
+            let f = za.by_index_raw(i).map_err(|e| e.to_string())?;
+            let inner = norm_inner(f.name());
+            if novos.contains(inner.as_str()) {
+                colide = true;
+            } else if !selected(&inner, &rm_filter) || rm_filter.is_none() {
+                sobrevivem += 1;
+            }
+        }
+    }
+    let rebuild = !remove.is_empty() || colide;
+
+    let mut rep = Reporter::new(
+        app.cloned(),
+        op_id,
+        files.len() as u64 + if rebuild { sobrevivem } else { 0 },
+        total_bytes,
+    );
+
+    if !rebuild {
+        // ---- caminho rápido: acrescenta no fim, sem tocar nos bytes antigos.
+        let rw = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(archive)
+            .map_err(|e| format!("{archive}: {e}"))?;
+        let mut zw = zip::ZipWriter::new_append(rw).map_err(|e| e.to_string())?;
+        for (disk, inner) in &files {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("canceled".into());
+            }
+            copia_pra_dentro(&mut zw, disk, inner, zip_opts(password), cancel, &mut rep)?;
+        }
+        zw.finish().map_err(|e| e.to_string())?;
+        return Ok(Some(archive.to_string()));
+    }
+
+    // ---- caminho reconstrução: raw_copy_file preserva os bytes comprimidos.
+    let tmp = PathBuf::from(format!("{archive}.localzip-tmp"));
+    let res = (|| -> Result<(), String> {
+        let za_file = fs::File::open(archive).map_err(|e| format!("{archive}: {e}"))?;
+        let mut za = zip::ZipArchive::new(za_file).map_err(|e| e.to_string())?;
+        let out = fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        let mut zw = zip::ZipWriter::new(out);
+        for i in 0..za.len() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("canceled".into());
+            }
+            let f = za.by_index_raw(i).map_err(|e| e.to_string())?;
+            let inner = norm_inner(f.name());
+            if inner.is_empty()
+                || novos.contains(inner.as_str())
+                || (rm_filter.is_some() && selected(&inner, &rm_filter))
+            {
+                continue;
+            }
+            zw.raw_copy_file(f).map_err(|e| e.to_string())?;
+            rep.file_done(&inner);
+        }
+        for (disk, inner) in &files {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("canceled".into());
+            }
+            copia_pra_dentro(&mut zw, disk, inner, zip_opts(password), cancel, &mut rep)?;
+        }
+        zw.finish().map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    if let Err(e) = res {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    // Só troca no fim: se algo estourar no meio, o original continua intacto.
+    fs::rename(&tmp, archive).map_err(|e| format!("{archive}: {e}"))?;
+    Ok(Some(archive.to_string()))
+}
+
+/// Mesmas opções da criação (Deflate + AES-256 quando há senha). Precisa ser
+/// `fn` com lifetime explícito: o `FileOptions` guarda a senha emprestada.
+fn zip_opts(password: Option<&str>) -> zip::write::FileOptions<'_, ()> {
+    let mut o = zip::write::FileOptions::<()>::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(true);
+    if let Some(pw) = password.filter(|p| !p.is_empty()) {
+        o = o.with_aes_encryption(zip::AesMode::Aes256, pw);
+    }
+    o
+}
+
+fn copia_pra_dentro<W: Write + Seek>(
+    zw: &mut zip::ZipWriter<W>,
+    disk: &Path,
+    inner: &str,
+    opt: zip::write::FileOptions<'_, ()>,
+    cancel: &AtomicBool,
+    rep: &mut Reporter,
+) -> Result<(), String> {
+    zw.start_file(inner.to_string(), opt).map_err(|e| e.to_string())?;
+    let mut f = fs::File::open(disk).map_err(|e| format!("{}: {e}", disk.display()))?;
+    let mut buf = vec![0u8; 512 * 1024];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("canceled".into());
+        }
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        zw.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        rep.bytes(n as u64, inner);
+    }
+    rep.file_done(inner);
+    Ok(())
+}
+
 // ---------- testar integridade ----------
 
 #[derive(Serialize, Clone)]
@@ -685,8 +914,9 @@ fn test_inner(archive: &str, password: Option<&str>) -> Result<u64, (String, Str
     let mut sink = [0u8; 256 * 1024];
 
     match format {
+        Format::Rar => return rar::test_integrity(archive, password),
         Format::Zip => {
-            let file = fs::File::open(archive).map_err(|e| (String::new(), e.to_string()))?;
+            let file = open_reader(archive).map_err(|e| (String::new(), e))?;
             let mut za = zip::ZipArchive::new(file).map_err(|e| (String::new(), e.to_string()))?;
             for i in 0..za.len() {
                 // Mesmo cuidado da extração: pastas nunca abrem conteúdo e só
@@ -725,8 +955,11 @@ fn test_inner(archive: &str, password: Option<&str>) -> Result<u64, (String, Str
         }
         Format::SevenZ => {
             let pw = password.map(Password::from).unwrap_or_else(Password::empty);
-            let mut reader =
-                ArchiveReader::open(archive, pw).map_err(|e| (String::new(), e.to_string()))?;
+            let mut reader = ArchiveReader::new(
+                open_reader(archive).map_err(|e| (String::new(), e))?,
+                pw,
+            )
+            .map_err(|e| (String::new(), e.to_string()))?;
             let count = reader
                 .archive()
                 .files
@@ -749,7 +982,7 @@ fn test_inner(archive: &str, password: Option<&str>) -> Result<u64, (String, Str
             tested = count;
         }
         _ => {
-            let file = fs::File::open(archive).map_err(|e| (String::new(), e.to_string()))?;
+            let file = open_reader(archive).map_err(|e| (String::new(), e))?;
             let mut ar = tar::Archive::new(tar_reader(file, format));
             let entries = ar.entries().map_err(|e| (String::new(), e.to_string()))?;
             for entry in entries {
@@ -885,7 +1118,7 @@ mod tests {
             zw.finish().unwrap();
         }
         let zip_s = zip_path.to_str().unwrap();
-        let cancel = AtomicBool::new(false);
+        let cancel = Arc::new(AtomicBool::new(false));
 
         // Senha certa: extrai tudo, com a estrutura de pastas.
         let dest = base.join("ok");
@@ -1057,7 +1290,7 @@ mod tests {
         let zip_path = base.join("zc.zip");
         fs::write(&zip_path, build_raw_zip(&entries)).unwrap();
         let zip_s = zip_path.to_str().unwrap();
-        let cancel = AtomicBool::new(false);
+        let cancel = Arc::new(AtomicBool::new(false));
 
         // Listagem marca o que é cifrado.
         let info = open_archive(zip_s).unwrap();
@@ -1085,6 +1318,296 @@ mod tests {
         assert!(r.ok, "{:?}", r.error);
         assert_eq!(r.tested, 2);
         assert!(!test_integrity(zip_s, Some("errada")).ok);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    // ---- volumes de corte cru (.001) e zip multi-disco (.z01) ----
+
+    /// Pica um arquivo em volumes `.001`, `.002`, … como o 7-Zip faz.
+    fn pica(src: &Path, pedaco: usize) -> Vec<PathBuf> {
+        let dados = fs::read(src).unwrap();
+        let mut out = Vec::new();
+        for (i, c) in dados.chunks(pedaco).enumerate() {
+            let p = src.with_file_name(format!(
+                "{}.{:03}",
+                src.file_name().unwrap().to_string_lossy(),
+                i + 1
+            ));
+            fs::write(&p, c).unwrap();
+            out.push(p);
+        }
+        out
+    }
+
+    #[test]
+    fn zip_dividido_em_001_abre_lista_e_extrai() {
+        // O caso do item B3b: um zip picado em volumes de corte cru tem que
+        // abrir, listar e extrair como se fosse um arquivo só — sem emendar
+        // nada em disco antes.
+        let base = std::env::temp_dir().join("localzip-test-split-zip");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let zip_path = base.join("grande.zip");
+        // Conteúdo grande o bastante pra uma entrada ATRAVESSAR a fronteira do
+        // volume — é aí que um SplitReader errado se denuncia.
+        let recheio: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        {
+            let out = fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(out);
+            let opt: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zw.start_file("a/grande.bin", opt).unwrap();
+            zw.write_all(&recheio).unwrap();
+            zw.start_file("b.txt", opt).unwrap();
+            zw.write_all(b"pequeno").unwrap();
+            zw.finish().unwrap();
+        }
+        let inteiro = fs::read(&zip_path).unwrap();
+        let vols = pica(&zip_path, 64 * 1024);
+        assert!(vols.len() > 3, "esperava vários volumes, veio {}", vols.len());
+        fs::remove_file(&zip_path).unwrap(); // só os volumes sobram no disco
+
+        let v1 = vols[0].to_str().unwrap();
+        // Detecção de formato olha o nome SEM o sufixo: `.zip.001` é zip.
+        assert!(matches!(detect_format(v1).unwrap(), Format::Zip));
+
+        let info = open_archive(v1).unwrap();
+        assert_eq!(info.entries.len(), 2, "listou pelos volumes emendados");
+        // `archive_bytes` é a SOMA dos volumes, não o tamanho do `.001`.
+        assert_eq!(info.archive_bytes, inteiro.len() as u64);
+        assert!(!info.bomb_suspect);
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let dest = base.join("out");
+        extract_inner(None, 1, &cancel, v1, dest.to_str().unwrap(), &None, None).unwrap();
+        assert_eq!(fs::read(dest.join("a/grande.bin")).unwrap(), recheio);
+        assert_eq!(fs::read(dest.join("b.txt")).unwrap(), b"pequeno");
+
+        // Abrir por um volume do MEIO acha o conjunto inteiro do mesmo jeito.
+        let info2 = open_archive(vols[2].to_str().unwrap()).unwrap();
+        assert_eq!(info2.entries.len(), 2);
+
+        // E a integridade (CRC de cada entrada) fecha lendo pelos volumes.
+        assert!(test_integrity(v1, None).ok);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn zip_multi_disco_da_erro_claro_em_vez_de_erro_do_crate() {
+        // `.z01` NÃO é corte cru: os deslocamentos do diretório central são
+        // por disco. Sem a checagem, o crate zip cospe "invalid Zip archive".
+        let base = std::env::temp_dir().join("localzip-test-multidisk");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let z = base.join("a.zip");
+        {
+            let out = fs::File::create(&z).unwrap();
+            let mut zw = zip::ZipWriter::new(out);
+            zw.start_file("x.txt", zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(b"x").unwrap();
+            zw.finish().unwrap();
+        }
+        let zs = z.to_str().unwrap();
+        // Sozinho abre normal.
+        assert!(open_archive(zs).is_ok());
+        // Com o irmão `.z01` do lado, vira erro NOSSO, com código próprio.
+        fs::write(base.join("a.z01"), b"disco 1").unwrap();
+        assert_eq!(open_archive(zs).err().unwrap(), "MULTI_DISK_ZIP");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let d = base.join("out");
+        assert_eq!(
+            extract_inner(None, 1, &cancel, zs, d.to_str().unwrap(), &None, None).unwrap_err(),
+            "MULTI_DISK_ZIP"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    // ---- adicionar / remover sem re-extrair ----
+
+    /// Zip com um membro grande e compressível + alguns pequenos.
+    fn zip_gordo(dir: &Path, mb: usize) -> (PathBuf, Vec<u8>) {
+        fs::create_dir_all(dir).unwrap();
+        // Compressível, mas não trivial: bloco pseudo-aleatório repetido.
+        let bloco: Vec<u8> = (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        let mut grande = Vec::with_capacity(mb * 1024 * 1024);
+        while grande.len() < mb * 1024 * 1024 {
+            grande.extend_from_slice(&bloco);
+        }
+        let z = dir.join("gordo.zip");
+        let out = fs::File::create(&z).unwrap();
+        let mut zw = zip::ZipWriter::new(out);
+        let opt = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zw.start_file("dados/grande.bin", opt).unwrap();
+        zw.write_all(&grande).unwrap();
+        for i in 0..3 {
+            zw.start_file(format!("docs/n{i}.txt"), opt).unwrap();
+            zw.write_all(format!("nota {i}").as_bytes()).unwrap();
+        }
+        zw.finish().unwrap();
+        (z, grande)
+    }
+
+    /// (nome, tamanho comprimido, crc) de cada entrada — a impressão digital
+    /// que prova se os bytes comprimidos foram preservados ou refeitos.
+    fn digital(z: &Path) -> Vec<(String, u64, u32)> {
+        let mut za = zip::ZipArchive::new(fs::File::open(z).unwrap()).unwrap();
+        (0..za.len())
+            .map(|i| {
+                let f = za.by_index_raw(i).unwrap();
+                (f.name().to_string(), f.compressed_size(), f.crc32())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn atualizar_nao_recomprime_nem_re_extrai() {
+        // A afirmação "não re-extrai" tem que ser MEDIDA, não prometida.
+        // Duas provas independentes:
+        //  1) estrutural: os bytes comprimidos e o CRC dos sobreviventes são
+        //     idênticos byte a byte (impossível se tivesse recomprimido);
+        //  2) tempo: a atualização é MUITO mais rápida que descompactar e
+        //     recompactar o mesmo zip.
+        let base = std::env::temp_dir().join("localzip-test-update");
+        let _ = fs::remove_dir_all(&base);
+        let (z, grande) = zip_gordo(&base, 32);
+        let zs = z.to_str().unwrap().to_string();
+        let antes = digital(&z);
+        let big_antes = antes.iter().find(|(n, ..)| n == "dados/grande.bin").unwrap().clone();
+
+        // Baseline honesto: o que custaria RE-EXTRAIR e recompactar tudo.
+        let t0 = Instant::now();
+        {
+            let mut za = zip::ZipArchive::new(fs::File::open(&z).unwrap()).unwrap();
+            let out = fs::File::create(base.join("refeito.zip")).unwrap();
+            let mut zw = zip::ZipWriter::new(out);
+            let opt = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            for i in 0..za.len() {
+                let name = za.by_index_raw(i).unwrap().name().to_string();
+                let mut f = za.by_index(i).unwrap();
+                let mut buf = Vec::new();
+                f.read_to_end(&mut buf).unwrap();
+                drop(f);
+                zw.start_file(name, opt).unwrap();
+                zw.write_all(&buf).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        let recompactar = t0.elapsed();
+
+        // Um arquivo novo pra entrar.
+        let novo = base.join("novo.txt");
+        fs::write(&novo, b"entrou depois").unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        // (a) SÓ ADICIONAR: caminho rápido (new_append) — nem lê os bytes antigos.
+        let t1 = Instant::now();
+        update_inner(
+            None,
+            1,
+            &cancel,
+            &zs,
+            &[novo.to_string_lossy().into_owned()],
+            &[],
+            None,
+        )
+        .unwrap();
+        let adicionar = t1.elapsed();
+
+        let dep_add = digital(&z);
+        assert!(dep_add.iter().any(|(n, ..)| n == "novo.txt"), "o novo entrou");
+        assert_eq!(
+            dep_add.iter().find(|(n, ..)| n == "dados/grande.bin").unwrap(),
+            &big_antes,
+            "o membro grande foi RECOMPRIMIDO ao adicionar (deveria ser intocado)"
+        );
+
+        // (b) REMOVER: reconstrói, mas por raw_copy_file (sem descompactar).
+        let t2 = Instant::now();
+        update_inner(None, 2, &cancel, &zs, &[], &["docs".to_string()], None).unwrap();
+        let remover = t2.elapsed();
+
+        let dep_rm = digital(&z);
+        assert!(!dep_rm.iter().any(|(n, ..)| n.starts_with("docs/")), "docs/ saiu");
+        assert!(dep_rm.iter().any(|(n, ..)| n == "novo.txt"), "novo.txt ficou");
+        assert_eq!(
+            dep_rm.iter().find(|(n, ..)| n == "dados/grande.bin").unwrap(),
+            &big_antes,
+            "remover RECOMPRIMIU o membro grande (deveria ser cópia crua)"
+        );
+
+        // O zip continua válido e o conteúdo continua correto de verdade.
+        assert!(test_integrity(&zs, None).ok, "zip atualizado deveria estar íntegro");
+        let dest = base.join("out");
+        extract_inner(None, 3, &cancel, &zs, dest.to_str().unwrap(), &None, None).unwrap();
+        assert_eq!(fs::read(dest.join("dados/grande.bin")).unwrap().len(), grande.len());
+        assert_eq!(fs::read(dest.join("dados/grande.bin")).unwrap(), grande);
+        assert_eq!(fs::read(dest.join("novo.txt")).unwrap(), b"entrou depois");
+
+        eprintln!(
+            "[MEDIDO] 32 MB: re-extrair+recompactar {recompactar:?} | adicionar {adicionar:?} | remover {remover:?}"
+        );
+        // Margem folgada de propósito: o que importa é a ordem de grandeza.
+        assert!(
+            adicionar * 4 < recompactar,
+            "adicionar ({adicionar:?}) deveria ser MUITO mais barato que recompactar ({recompactar:?})"
+        );
+        assert!(
+            remover * 4 < recompactar,
+            "remover ({remover:?}) deveria ser MUITO mais barato que recompactar ({recompactar:?})"
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn atualizar_sobrescreve_nome_repetido_e_recusa_formato_errado() {
+        let base = std::env::temp_dir().join("localzip-test-update2");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let z = base.join("a.zip");
+        {
+            let out = fs::File::create(&z).unwrap();
+            let mut zw = zip::ZipWriter::new(out);
+            let opt = zip::write::SimpleFileOptions::default();
+            zw.start_file("nota.txt", opt).unwrap();
+            zw.write_all(b"versao velha").unwrap();
+            zw.start_file("outro.txt", opt).unwrap();
+            zw.write_all(b"fica").unwrap();
+            zw.finish().unwrap();
+        }
+        let zs = z.to_str().unwrap().to_string();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        // Nome que já existe: não pode duplicar a entrada — a nova substitui.
+        let novo = base.join("nota.txt");
+        fs::write(&novo, b"versao nova").unwrap();
+        update_inner(None, 1, &cancel, &zs, &[novo.to_string_lossy().into_owned()], &[], None)
+            .unwrap();
+        let d = digital(&z);
+        assert_eq!(d.iter().filter(|(n, ..)| n == "nota.txt").count(), 1, "duplicou: {d:?}");
+        let dest = base.join("out");
+        extract_inner(None, 2, &cancel, &zs, dest.to_str().unwrap(), &None, None).unwrap();
+        assert_eq!(fs::read(dest.join("nota.txt")).unwrap(), b"versao nova");
+        assert_eq!(fs::read(dest.join("outro.txt")).unwrap(), b"fica");
+
+        // Formato só-leitura: recusa com código claro em vez de estragar nada.
+        let tgz = base.join("a.tar.gz");
+        fs::write(&tgz, b"nao importa").unwrap();
+        let err = update_inner(
+            None,
+            3,
+            &cancel,
+            tgz.to_str().unwrap(),
+            &[novo.to_string_lossy().into_owned()],
+            &[],
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, "UPDATE_ONLY_ZIP");
 
         let _ = fs::remove_dir_all(&base);
     }

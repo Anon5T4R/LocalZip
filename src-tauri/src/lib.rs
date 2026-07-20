@@ -1,4 +1,6 @@
 mod archive;
+mod rar;
+mod split;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -79,6 +81,26 @@ fn start_create(
     Ok(op_id)
 }
 
+/// Adiciona e/ou remove itens de um zip existente SEM re-extrair o resto.
+/// `add` = caminhos no disco; `remove` = caminhos DENTRO do arquivo.
+#[tauri::command(async)]
+fn start_update(
+    app: AppHandle,
+    state: State<'_, OpsState>,
+    archive: String,
+    add: Vec<String>,
+    remove: Vec<String>,
+    password: Option<String>,
+) -> Result<u64, String> {
+    let (op_id, cancel) = state.register();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        archive::update(&handle, op_id, cancel, archive, add, remove, password);
+        handle.state::<OpsState>().finish(op_id);
+    });
+    Ok(op_id)
+}
+
 /// Testa a integridade lendo tudo (valida CRC no zip; trunca/corrompe no tar).
 #[tauri::command(async)]
 fn test_integrity(archive: String, password: Option<String>) -> archive::IntegrityResult {
@@ -126,6 +148,7 @@ pub fn run() {
             open_archive,
             start_extract,
             start_create,
+            start_update,
             test_integrity,
             cancel_op,
             get_startup_file,

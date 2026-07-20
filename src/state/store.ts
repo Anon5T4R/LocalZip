@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import * as backend from "../lib/backend";
-import { t } from "../lib/i18n";
+import { t, tError } from "../lib/i18n";
 import type { ArchiveInfo, OpKind, RunningOp } from "../lib/types";
 import { useUi } from "./ui";
 
@@ -24,6 +24,9 @@ interface ZipState {
     sources: string[],
     password?: string | null,
   ) => Promise<void>;
+  startUpdate: (add: string[], remove: string[], password?: string | null) => Promise<void>;
+  /** Relê o índice do arquivo aberto (depois de alterá-lo). */
+  reload: () => Promise<void>;
   opProgress: (opId: number, p: RunningOp["progress"]) => void;
   opDone: (opId: number) => void;
 }
@@ -40,7 +43,7 @@ export const useZip = create<ZipState>((set, get) => ({
       const info = await backend.openArchive(path);
       set({ info, dir: "", selection: [], anchor: null });
     } catch (e) {
-      useUi.getState().pushToast("error", t("toast.openFailed", { error: String(e) }));
+      useUi.getState().pushToast("error", t("toast.openFailed", { error: tError(String(e)) }));
     }
   },
 
@@ -61,6 +64,24 @@ export const useZip = create<ZipState>((set, get) => ({
     await startOp(set, "create", () => backend.startCreate(dest, format, sources, password));
   },
 
+  startUpdate: async (add, remove, password) => {
+    const info = get().info;
+    if (!info) return;
+    await startOp(set, "update", () => backend.startUpdate(info.path, add, remove, password));
+  },
+
+  reload: async () => {
+    const info = get().info;
+    if (!info) return;
+    try {
+      const fresh = await backend.openArchive(info.path);
+      // A seleção antiga pode apontar pra itens que acabaram de sair.
+      set({ info: fresh, selection: [], anchor: null });
+    } catch (e) {
+      useUi.getState().pushToast("error", t("toast.openFailed", { error: tError(String(e)) }));
+    }
+  },
+
   opProgress: (opId, progress) =>
     set((s) => ({ ops: s.ops.map((o) => (o.opId === opId ? { ...o, progress } : o)) })),
 
@@ -76,6 +97,6 @@ async function startOp(
     const opId = await invoke();
     set((s) => ({ ops: [...s.ops, { opId, kind, progress: null }] }));
   } catch (e) {
-    useUi.getState().pushToast("error", t("toast.opFailed", { error: String(e) }));
+    useUi.getState().pushToast("error", t("toast.opFailed", { error: tError(String(e)) }));
   }
 }

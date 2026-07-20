@@ -28,7 +28,7 @@ const pt = {
   "empty.sub": "Abra um arquivo compactado ou crie um novo. Dá pra arrastar pra cá também.",
   "empty.open": "Abrir arquivo…",
   "empty.create": "Criar arquivo…",
-  "empty.formats": "zip (senha AES) · 7z (extração) · tar · tar.gz/xz/bz2/zst (rar na v0.4)",
+  "empty.formats": "zip (senha AES) · rar · 7z · tar · tar.gz/xz/bz2/zst · volumes .001",
 
   // TopBar
   "top.open": "Abrir…",
@@ -100,7 +100,21 @@ const pt = {
   // Toasts / erros
   "toast.openFailed": "Não consegui abrir: {error}",
   "toast.opFailed": "Falha na operação: {error}",
-  "toast.notArchive": "“{name}” não é um formato suportado (v0.1: zip, tar, tar.gz)",
+  "toast.notArchive": "“{name}” não é um formato suportado (zip, rar, 7z, tar e variantes)",
+
+  // Adicionar/remover num arquivo existente (v0.5)
+  "top.add": "Adicionar…",
+  "top.addTitle": "Adicionar arquivos a este zip (sem re-extrair o resto)",
+  "top.remove": "Remover",
+  "top.removeTitle": "Remover os itens selecionados do zip",
+  "update.confirmRemove": "Remover {n} item(ns) do arquivo? O zip será reescrito.",
+  "update.done": "Arquivo atualizado: {dest}",
+  "update.onlyZip": "Adicionar/remover só funciona em zip — este formato é só leitura.",
+  "update.notOnSplit": "Não dá pra alterar um arquivo dividido em volumes (só leitura).",
+
+  // Erros de formato
+  "err.multiDisk":
+    "Este é um zip multi-disco de verdade (.z01/.z02), que guarda os deslocamentos por disco. Junte os volumes no WinRAR/7-Zip e abra o .zip resultante.",
 
   // Atalhos / diversos
   "dlg.cancel": "Cancelar",
@@ -129,7 +143,7 @@ const en: Record<MessageKey, string> = {
   "empty.sub": "Open an archive or create a new one. You can also drag one here.",
   "empty.open": "Open archive…",
   "empty.create": "Create archive…",
-  "empty.formats": "zip (AES password) · 7z (extract) · tar · tar.gz/xz/bz2/zst (rar in v0.4)",
+  "empty.formats": "zip (AES password) · rar · 7z · tar · tar.gz/xz/bz2/zst · .001 volumes",
 
   "top.open": "Open…",
   "top.openTitle": "Open archive (Ctrl+O)",
@@ -191,7 +205,21 @@ const en: Record<MessageKey, string> = {
 
   "toast.openFailed": "Couldn't open: {error}",
   "toast.opFailed": "Operation failed: {error}",
-  "toast.notArchive": "“{name}” is not a supported format (v0.1: zip, tar, tar.gz)",
+  "toast.notArchive": "“{name}” is not a supported format (zip, rar, 7z, tar and variants)",
+
+  // Adicionar/remover num arquivo existente (v0.5)
+  "top.add": "Add…",
+  "top.addTitle": "Add files to this zip (without re-extracting the rest)",
+  "top.remove": "Remove",
+  "top.removeTitle": "Remove the selected items from the zip",
+  "update.confirmRemove": "Remove {n} item(s) from the archive? The zip will be rewritten.",
+  "update.done": "Archive updated: {dest}",
+  "update.onlyZip": "Add/remove only works on zip — this format is read-only.",
+  "update.notOnSplit": "A split (multi-volume) archive can't be modified — read-only.",
+
+  // Erros de formato
+  "err.multiDisk":
+    "This is a true multi-disk zip (.z01/.z02), which stores offsets per disk. Join the volumes in WinRAR/7-Zip and open the resulting .zip.",
 
   "dlg.cancel": "Cancel",
   "dlg.ok": "OK",
@@ -216,7 +244,7 @@ const es: Record<MessageKey, string> = {
   "empty.sub": "Abre un archivo comprimido o crea uno nuevo. También puedes arrastrarlo aquí.",
   "empty.open": "Abrir archivo…",
   "empty.create": "Crear archivo…",
-  "empty.formats": "zip (contraseña AES) · 7z (extracción) · tar · tar.gz/xz/bz2/zst (rar en v0.4)",
+  "empty.formats": "zip (contraseña AES) · rar · 7z · tar · tar.gz/xz/bz2/zst · volúmenes .001",
 
   "top.open": "Abrir…",
   "top.openTitle": "Abrir archivo comprimido (Ctrl+O)",
@@ -279,7 +307,21 @@ const es: Record<MessageKey, string> = {
 
   "toast.openFailed": "No se pudo abrir: {error}",
   "toast.opFailed": "Error en la operación: {error}",
-  "toast.notArchive": "“{name}” no es un formato soportado (v0.1: zip, tar, tar.gz)",
+  "toast.notArchive": "“{name}” no es un formato soportado (zip, rar, 7z, tar y variantes)",
+
+  // Adicionar/remover num arquivo existente (v0.5)
+  "top.add": "Añadir…",
+  "top.addTitle": "Añadir archivos a este zip (sin volver a extraer el resto)",
+  "top.remove": "Quitar",
+  "top.removeTitle": "Quitar del zip los elementos seleccionados",
+  "update.confirmRemove": "¿Quitar {n} elemento(s) del archivo? El zip se reescribirá.",
+  "update.done": "Archivo actualizado: {dest}",
+  "update.onlyZip": "Añadir/quitar solo funciona en zip: este formato es de solo lectura.",
+  "update.notOnSplit": "No se puede modificar un archivo dividido en volúmenes (solo lectura).",
+
+  // Erros de formato
+  "err.multiDisk":
+    "Este es un zip multidisco real (.z01/.z02), que guarda los desplazamientos por disco. Une los volúmenes en WinRAR/7-Zip y abre el .zip resultante.",
 
   "dlg.cancel": "Cancelar",
   "dlg.ok": "OK",
@@ -343,6 +385,31 @@ function subscribe(l: () => void) {
 
 export function useLocale(): Locale {
   return useSyncExternalStore(subscribe, getLocale);
+}
+
+/**
+ * Códigos de erro do backend → mensagem traduzida.
+ *
+ * O Rust devolve códigos estáveis (`NEED_PASSWORD`, `MULTI_DISK_ZIP`, …) em vez
+ * de frases: assim a mensagem que o usuário lê é traduzida aqui, e um texto de
+ * erro do sistema operacional (que não temos como traduzir) passa direto.
+ */
+export function tError(code: string | null | undefined): string {
+  const raw = (code ?? "").replace(/^.*?Error:\s*/, "");
+  switch (raw) {
+    case "NEED_PASSWORD":
+      return t("password.needed");
+    case "WRONG_PASSWORD":
+      return t("password.wrong");
+    case "MULTI_DISK_ZIP":
+      return t("err.multiDisk");
+    case "UPDATE_ONLY_ZIP":
+      return t("update.onlyZip");
+    case "UPDATE_NOT_ON_SPLIT":
+      return t("update.notOnSplit");
+    default:
+      return raw;
+  }
 }
 
 /** Traduz uma chave, interpolando placeholders `{param}`. */

@@ -27,6 +27,20 @@ export function startCreate(
   return invoke("start_create", { dest, format, sources, password: password ?? null });
 }
 
+/**
+ * Adiciona (`add`, caminhos no disco) e/ou remove (`remove`, caminhos DENTRO do
+ * arquivo) num zip existente, sem re-extrair o resto. Progresso pelos mesmos
+ * eventos das outras operações.
+ */
+export function startUpdate(
+  archive: string,
+  add: string[],
+  remove: string[],
+  password?: string | null,
+): Promise<number> {
+  return invoke("start_update", { archive, add, remove, password: password ?? null });
+}
+
 export interface IntegrityResult {
   ok: boolean;
   tested: number;

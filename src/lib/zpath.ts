@@ -107,11 +107,24 @@ export function formatDate(ms: number, localeTag: string): string {
   );
 }
 
-/** O caminho parece um arquivo compactado que a gente abre? */
+/**
+ * O caminho parece um arquivo compactado que a gente abre?
+ *
+ * Cuidado com as três famílias de "arquivo dividido", que são diferentes:
+ * `foo.zip.001` (corte cru, qualquer formato), `foo.part2.rar` (multivolume do
+ * próprio RAR) e `foo.r07` (a numeração antiga do RAR, que nem termina em
+ * `.rar`). O `.z01` do zip multi-disco entra de propósito: é melhor abrir e
+ * explicar por que não dá do que fingir que o arquivo não existe.
+ */
 export function isSupportedArchive(path: string): boolean {
-  const l = path.toLowerCase();
+  let l = path.toLowerCase();
+  // Sufixo de volume de corte cru (3+ dígitos) não muda o formato: tira e segue.
+  l = l.replace(/\.\d{3,}$/, "");
   return (
     l.endsWith(".zip") ||
+    l.endsWith(".z01") ||
+    l.endsWith(".rar") ||
+    /\.r\d{2}$/.test(l) ||
     l.endsWith(".7z") ||
     l.endsWith(".tar") ||
     /\.(tar\.gz|tgz|tar\.xz|txz|tar\.bz2|tbz2|tbz|tar\.zst|tzst)$/.test(l)

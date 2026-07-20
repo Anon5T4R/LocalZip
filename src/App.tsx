@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { getStartupFile, isTauri } from "./lib/backend";
-import { t } from "./lib/i18n";
+import { t, tError } from "./lib/i18n";
 import { childrenOf, isSupportedArchive, parentDir } from "./lib/zpath";
 import type { OpDone, OpProgress } from "./lib/types";
 import CreateModal from "./components/CreateModal";
@@ -47,11 +47,15 @@ export default function App() {
       } else if (!e.payload.ok && e.payload.error === "WRONG_PASSWORD") {
         ui.pushToast("error", t("password.wrong"));
       } else if (!e.payload.ok && e.payload.error) {
-        ui.pushToast("error", t("toast.opFailed", { error: e.payload.error }));
+        ui.pushToast("error", t("toast.opFailed", { error: tError(e.payload.error) }));
       } else if (e.payload.ok && e.payload.output) {
         if (op?.kind === "extract") {
           ui.pushToast("ok", t("extract.done", { dest: e.payload.output }));
           void openPath(e.payload.output).catch(() => {}); // abre a pasta extraída
+        } else if (op?.kind === "update") {
+          // O índice mudou: relê pra tabela não mostrar o que já saiu.
+          ui.pushToast("ok", t("update.done", { dest: e.payload.output }));
+          void zip.reload();
         } else {
           ui.pushToast("ok", t("create.done", { dest: e.payload.output }));
         }

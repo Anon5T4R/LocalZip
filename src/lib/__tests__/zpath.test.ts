@@ -79,10 +79,32 @@ describe("isSupportedArchive / formatBytes", () => {
     expect(isSupportedArchive("x.7z")).toBe(true);
   });
 
+  it("rar: extensão normal e as duas numerações de volume", () => {
+    // Extrair RAR passou a existir (crate puro-Rust, MIT/Apache); CRIAR RAR
+    // continua fora de escopo — é formato proprietário.
+    expect(isSupportedArchive("x.rar")).toBe(true);
+    expect(isSupportedArchive("x.part1.rar")).toBe(true);
+    // Numeração antiga: o volume nem termina em ".rar".
+    expect(isSupportedArchive("x.r00")).toBe(true);
+    expect(isSupportedArchive("x.r14")).toBe(true);
+    expect(isSupportedArchive("x.r1")).toBe(false); // 1 dígito não é volume
+  });
+
+  it("volumes de corte cru (.001) herdam o formato do nome de baixo", () => {
+    expect(isSupportedArchive("x.zip.001")).toBe(true);
+    expect(isSupportedArchive("x.7z.002")).toBe(true);
+    expect(isSupportedArchive("x.tar.gz.017")).toBe(true);
+    // O sufixo sozinho não salva um formato que não abrimos.
+    expect(isSupportedArchive("x.txt.001")).toBe(false);
+    expect(isSupportedArchive("x.zip.01")).toBe(false); // 2 dígitos não é volume
+  });
+
+  it("zip multi-disco abre pra poder EXPLICAR que não dá", () => {
+    // Melhor abrir e mostrar a mensagem certa do que fingir que não é arquivo.
+    expect(isSupportedArchive("x.z01")).toBe(true);
+  });
+
   it("NÃO suportadas", () => {
-    // RAR é decisão de escopo, não esquecimento: criar RAR está fora (formato
-    // proprietário) e extrair depende de crate puro-Rust, ainda não avaliado.
-    expect(isSupportedArchive("x.rar")).toBe(false);
     expect(isSupportedArchive("x.txt")).toBe(false);
     expect(isSupportedArchive("x.gz")).toBe(false); // .gz solto não é arquivo-contêiner
   });

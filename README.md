@@ -6,6 +6,24 @@ de terceiro).
 
 ## Recursos
 
+**v0.5**
+- **Extrair RAR** (RAR 1.5–4.x e RAR5, com senha, multivolume nas duas
+  numerações: `.part1.rar` e `.rar`+`.r00`) — via crate **puro Rust**, sem
+  `unrar.dll` nem binário de terceiro. **Criar RAR está fora de escopo**: o
+  compactador é proprietário da WinRAR GmbH.
+- **Volumes divididos** (`foo.zip.001`, `foo.7z.002`, …): abre, lista e extrai
+  direto dos volumes, **sem emendar nada em disco** — os N arquivos são
+  apresentados ao leitor como um fluxo `Read + Seek` só. Vale pra zip, 7z e tar.
+- **Zip multi-disco de verdade** (`.z01`/`.z02`) é detectado e recusado **com
+  explicação**, em vez do "invalid Zip archive" do crate. É outro formato: os
+  deslocamentos do diretório central são relativos ao disco, então emendar os
+  volumes não resolveria.
+- **Adicionar e remover num zip existente sem re-extrair**. Adicionar usa
+  acréscimo no fim (os bytes antigos não são nem lidos); remover reconstrói
+  copiando **o fluxo já comprimido** de cada sobrevivente. Medido num zip de
+  32 MB: re-extrair+recompactar 1122 ms · adicionar **1,9 ms** · remover
+  **4,1 ms**.
+
 **v0.2**
 - **Mais formatos**: além de zip/tar/tar.gz, agora abre e extrai **`tar.xz`,
   `tar.bz2` e `tar.zst`**
@@ -27,13 +45,19 @@ de terceiro).
   suspeita) e aviso de itens protegidos por senha
 - Tema claro/escuro/sistema · UI em **PT/EN/ES**
 
-**Roadmap:** v0.3 = 7z, extração de RAR, volumes divididos, adicionar/remover
-sem re-extrair, integração com o LocalFiles.
+**Roadmap:** integração com o LocalFiles (zip inline).
 
 ## Stack
 
 Tauri 2 + React 19 + Vite + TypeScript no front; Rust no back (`zip`, `tar`,
-`flate2` — streaming com progresso, tudo no Rust). Sem sidecar, sem rede.
+`flate2`, `sevenz-rust2`, `rars` — streaming com progresso, tudo no Rust). Sem
+sidecar, sem rede, sem binário de terceiro: todas as dependências são crates
+compilados pelo cargo.
+
+Os `.rar` de teste em `src-tauri/tests/fixtures/` vieram do **WinRAR de
+verdade** (via o corpus MIT/Apache do projeto `rars`), não do crate que a gente
+testa — se o fixture saísse do mesmo código que lê, um bug na leitura e um na
+escrita se cancelariam e o teste passaria mentindo. Detalhes no README de lá.
 
 ## Dev
 
