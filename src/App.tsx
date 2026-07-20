@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { getStartupFile, isTauri } from "./lib/backend";
+import { getStartupFile, isTauri, trayLabelsSet } from "./lib/backend";
 import { t, tError } from "./lib/i18n";
 import { childrenOf, isSupportedArchive, parentDir } from "./lib/zpath";
 import type { OpDone, OpProgress } from "./lib/types";
@@ -26,6 +26,15 @@ export default function App() {
         if (f && isSupportedArchive(f)) void useZip.getState().open(f);
       })
       .catch(() => {});
+  }, []);
+
+  // O menu da bandeja nasce em Rust, antes de existir webview, então não sabe o
+  // idioma. Mandamos os rótulos traduzidos aqui — e como o `main.tsx` remonta o
+  // App na troca de idioma (`key={locale}`), este efeito roda de novo e a
+  // bandeja acompanha.
+  useEffect(() => {
+    if (!isTauri) return;
+    void trayLabelsSet(t("tray.show"), t("tray.quit")).catch(() => {});
   }, []);
 
   // Eventos: progresso/fim das operações, 2ª instância e drag-and-drop.

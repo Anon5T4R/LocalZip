@@ -1,6 +1,6 @@
 [package]
 name = "localzip"
-version = "0.5.0"
+version = "0.6.0"
 description = "LocalZip — compactador de arquivos 100% offline da suíte Local"
 authors = ["Taylor"]
 edition = "2021"
@@ -17,7 +17,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# tray-icon + image-png: fechar a janela minimiza pra bandeja e a extração
+# longa segue viva em vez de morrer com a janela.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -36,3 +38,14 @@ rars = "0.4"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
+# Autostart opcional (opt-in em Configurações): abrir com o sistema direto na
+# bandeja, pronto pra receber um arquivo compactado.
+tauri-plugin-autostart = "2"
+
+[target.'cfg(windows)'.dependencies]
+# Lê a chave Run na mão pra decidir se o autostart precisa ser reimposto: o
+# `is_enabled()` do plugin só checa se a entrada existe, sem comparar o caminho
+# (então não enxerga uma entrada obsoleta), e não distingue "apagada" de
+# "desligada pelo Gerenciador de Tarefas" — que pedem respostas opostas.
+# Mesma versão que o auto-launch já usa: não entra crate nova na árvore.
+winreg = "0.55"

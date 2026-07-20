@@ -1,6 +1,7 @@
 mod archive;
 mod rar;
 mod split;
+mod tray;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,6 +34,10 @@ impl OpsState {
     }
     fn finish(&self, id: u64) {
         self.ops.lock().unwrap().remove(&id);
+    }
+    /// Há operação viva? É o que impede o X de matar uma extração longa.
+    fn any_running(&self) -> bool {
+        !self.ops.lock().unwrap().is_empty()
     }
 }
 
@@ -130,20 +135,45 @@ pub fn run() {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         // Segunda instância: foca a janela e abre o arquivo que veio no arg.
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.set_focus();
-            }
-            if let Some(file) = startup_file_from(args.into_iter().skip(1)) {
-                let _ = app.emit("open-file", file);
-            }
-        }));
+        // Um 2º launch com "--hidden" é o logon batendo num app que já está
+        // vivo (ex.: já aberto na bandeja): não estoura a janela na cara.
+        builder = builder
+            .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+                if !args.iter().any(|a| a == "--hidden") {
+                    tray::open_main(app);
+                }
+                if let Some(file) = startup_file_from(args.into_iter().skip(1)) {
+                    let _ = app.emit("open-file", file);
+                }
+            }))
+            // Autostart opt-in: entra no logon com "--hidden" pra ficar só na
+            // bandeja, pronto pra receber um arquivo, sem roubar a tela.
+            .plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                Some(vec!["--hidden"]),
+            ));
     }
 
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(OpsState::default())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tray::init_state(&handle);
+
+            // Bandeja + "fechar minimiza": é o que deixa a extração terminar com
+            // a janela fechada, em vez de morrer junto com ela.
+            let ops_handle = handle.clone();
+            tray::setup(&handle, move || ops_handle.state::<OpsState>().any_running())?;
+            tray::hide_if_launched_hidden(&handle);
+
+            // Reimpõe o autostart conforme a intenção guardada (conserta entrada
+            // apagada ou apontando pro caminho antigo). Fora da thread
+            // principal: mexe no registro e não deve segurar a abertura.
+            std::thread::spawn(move || tray::reconcile(&handle));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             open_archive,
             start_extract,
@@ -152,6 +182,11 @@ pub fn run() {
             test_integrity,
             cancel_op,
             get_startup_file,
+            tray::autostart_get,
+            tray::autostart_set,
+            tray::close_to_tray_get,
+            tray::close_to_tray_set,
+            tray::tray_labels_set,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

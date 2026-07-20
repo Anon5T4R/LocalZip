@@ -431,6 +431,23 @@ input {
   gap: 12px;
   padding: 8px 0;
 }
+/* Linhas com explicação embaixo do rótulo: o texto quebra em várias linhas,
+   então alinhar pelo topo (senão a checkbox flutua no meio do parágrafo). */
+.settings-row:has(.settings-hint) {
+  align-items: flex-start;
+}
+.settings-section {
+  font-size: 13px;
+  margin: 18px 0 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.settings-hint {
+  display: block;
+  margin-top: 3px;
+  max-width: 46ch;
+  line-height: 1.45;
+}
 .about {
   font-size: 12.5px;
   line-height: 1.5;

@@ -59,3 +59,32 @@ export function cancelOp(opId: number): Promise<void> {
 export function getStartupFile(): Promise<string | null> {
   return invoke("get_startup_file");
 }
+
+// ---------- bandeja e autostart ----------
+
+/**
+ * A intenção de "abrir com o sistema" mora no BACKEND (settings.json na pasta de
+ * dados), não no registro do Windows: o registro é só o efeito, e um efeito que
+ * envelhece sozinho quando o exe muda de lugar. Por isso não há localStorage
+ * aqui — o valor exibido é sempre o que o backend reconciliou no boot.
+ */
+export function autostartGet(): Promise<boolean> {
+  return invoke("autostart_get");
+}
+
+export function autostartSet(enabled: boolean): Promise<void> {
+  return invoke("autostart_set", { enabled });
+}
+
+export function closeToTrayGet(): Promise<boolean> {
+  return invoke("close_to_tray_get");
+}
+
+export function closeToTraySet(enabled: boolean): Promise<void> {
+  return invoke("close_to_tray_set", { enabled });
+}
+
+/** Manda os rótulos traduzidos pro menu da bandeja (que nasce antes do front). */
+export function trayLabelsSet(show: string, quit: string): Promise<void> {
+  return invoke("tray_labels_set", { show, quit });
+}
