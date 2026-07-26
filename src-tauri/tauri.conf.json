@@ -37,7 +37,8 @@
         "ext": ["zip", "7z", "tar", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "zst", "tzst"],
         "name": "Arquivo compactado",
         "description": "Arquivo compactado (LocalZip)",
-        "role": "Viewer"
+        "role": "Viewer",
+        "mimeType": "application/zip,application/x-7z-compressed,application/x-tar,application/gzip,application/x-compressed-tar,application/x-xz,application/x-xz-compressed-tar,application/x-bzip2,application/x-bzip2-compressed-tar,application/zstd,application/x-zstd-compressed-tar"
       }
     ],
     "icon": [
