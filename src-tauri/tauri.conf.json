@@ -32,6 +32,11 @@
         "installerIcon": "icons/icon.ico"
       }
     },
+    "linux": {
+      "deb": {
+        "desktopTemplate": "desktop-entry.desktop"
+      }
+    },
     "fileAssociations": [
       {
         "ext": ["zip", "7z", "tar", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "zst", "tzst"],
