@@ -49,3 +49,8 @@ tauri-plugin-autostart = "2"
 # "desligada pelo Gerenciador de Tarefas" — que pedem respostas opostas.
 # Mesma versão que o auto-launch já usa: não entra crate nova na árvore.
 winreg = "0.55"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# CSD limpa: contorna a titlebar quebrada do tao <= 0.35 no GNOME/Wayland
+# (ver lib.rs). Mesma versao que o tauri ja puxa. Sai junto com o upgrade ao tao 0.36.
+gtk = "0.18"

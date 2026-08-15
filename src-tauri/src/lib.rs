@@ -43,6 +43,7 @@ impl OpsState {
 
 /// Lê o índice do arquivo compactado (sem extrair nada).
 #[tauri::command(async)]
+
 fn open_archive(path: String) -> Result<ArchiveInfo, String> {
     archive::open_archive(&path)
 }
@@ -128,6 +129,22 @@ fn startup_file_from(args: impl Iterator<Item = String>) -> Option<String> {
         .find(|a| Path::new(a).is_file())
 }
 
+/// Contorna a titlebar quebrada do tao <= 0.35 no GNOME/Wayland (CSD propia
+/// com regiao de input morta — causa e fix em tao#1218, so via tauri 2.12):
+/// troca por uma HeaderBar comum com layout forcado min/max/fechar, ANTES do
+/// primeiro map. Sai junto com o upgrade ao tao 0.36 (wry 0.56).
+#[cfg(target_os = "linux")]
+fn instalar_csd_limpa(w: &tauri::WebviewWindow) {
+    use gtk::prelude::*;
+    let Ok(gw) = w.gtk_window() else { return };
+    let header = gtk::HeaderBar::new();
+    header.set_show_close_button(true);
+    header.set_decoration_layout(Some("menu:minimize,maximize,close"));
+    header.set_title(Some("LocalZip"));
+    header.show();
+    gw.set_titlebar(Some(&header));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // ── Contorno da tela branca do webkit: REMOVIDO, e o porquê importa ──────
@@ -179,6 +196,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(OpsState::default())
         .setup(|app| {
+
+            #[cfg(target_os = "linux")]
+            if let Some(w) = app.get_webview_window("main") {
+                instalar_csd_limpa(&w);
+            }
             let handle = app.handle().clone();
             tray::init_state(&handle);
 
